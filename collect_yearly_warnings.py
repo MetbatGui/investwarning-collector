@@ -21,6 +21,7 @@ from openpyxl.utils import get_column_letter
 
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
+from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
 
@@ -28,11 +29,15 @@ from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_inv
 # 설정
 # ─────────────────────────────────────────────────────────────────────────────
 OUTPUT_DIR = "output"
+PARQUET_DIR = "output/parquet"
 MAX_WARNING_DAYS = 60  # 60일 이하 경고 종목만 수집
 TRADING_DAYS_AFTER_RELEASE = 3  # 해제일 이후 추가 수집일
 
 # 기본 저장소로 LocalStorageAdapter 사용
 _storage: StoragePort = LocalStorageAdapter()
+
+# 기본 레포지터리로 ParquetRepositoryAdapter 사용
+_repository: ParquetRepositoryAdapter = ParquetRepositoryAdapter(PARQUET_DIR)
 
 
 def set_storage(storage_adapter: StoragePort):
@@ -42,6 +47,17 @@ def set_storage(storage_adapter: StoragePort):
 
 def get_storage() -> StoragePort:
     return _storage
+
+
+def set_repository(repo: ParquetRepositoryAdapter) -> None:
+    """전역 레포지터리 어댑터를 교체합니다 (테스트·CLI 용도)."""
+    global _repository
+    _repository = repo
+
+
+def get_repository() -> ParquetRepositoryAdapter:
+    """현재 사용 중인 레포지터리 어댑터를 반환합니다."""
+    return _repository
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,12 +148,21 @@ def collect_year(year: int, include_active: bool = False) -> bool:
     )
 
     # ── Step 4: 저장 ─────────────────────────────────────────────────────────
-    print("\n[4/4] 결과 저장 (StorageAdapter 사용)...")
+    print("\n[4/4] 결과 저장 (Parquet + Excel)...")
     storage = get_storage()
     storage.ensure_directory(OUTPUT_DIR)
 
+    # 4-a. Parquet 저장 (원시 데이터 보존)
+    repo = get_repository()
+    repo.save_year(year, filtered, daily_prices_by_code)
+    print(f"  [Parquet] {PARQUET_DIR}/{year}.parquet 저장 완료")
+
+    # 4-b. CSV 저장 (하위 호환용)
     _save_csv(year, filtered, daily_prices_by_code, storage)
-    _save_excel(year, filtered, daily_prices_by_code, storage)
+
+    # 4-c. Excel 출력 (Parquet에서 로드하여 재생성)
+    reloaded_stocks, reloaded_prices = repo.load_year(year)
+    _save_excel(year, reloaded_stocks, reloaded_prices, storage)
 
     print(f"\n  [완료] {year}년 수집 완료")
     return True

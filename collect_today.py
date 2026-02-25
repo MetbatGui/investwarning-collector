@@ -24,18 +24,20 @@ import pandas as pd
 
 # collect_yearly_warnings.py에서 공통 상수·저장 함수만 재사용
 sys.path.insert(0, os.path.dirname(__file__))
-from collect_yearly_warnings import (
+from collect_yearly_warnings import (  # noqa: E402
     MAX_WARNING_DAYS,
     OUTPUT_DIR,
+    PARQUET_DIR,
     TRADING_DAYS_AFTER_RELEASE,
     _save_excel,
+    get_repository,
     get_storage,
 )
-from investment_hub.core.ports.storage_port import StoragePort
-from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
-from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
-from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
+from investment_hub.core.ports.storage_port import StoragePort  # noqa: E402
+from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock  # noqa: E402
+from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter  # noqa: E402
+from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch  # noqa: E402
+from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 로깅 설정
@@ -302,15 +304,19 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
         logger.warning("  조회 결과 없음. 종료.")
         return False
 
-    # ── Step 2: release_date 동기화 ─────────────────────────────────────────
-    logger.info("[2/6] release_date 동기화 (현재·이전 연도 CSV)...")
+    # ── Step 2: release_date 동기화 (Parquet + CSV) ──────────────────────────
+    logger.info("[2/6] release_date 동기화 (현재·이전 연도 Parquet)...")
     _sync_release_dates(year, all_filtered, storage, logger)
 
-    # sync 이후 최신 CSV 로드
-    csv_path = _csv_path(year)
-    existing_df = _load_existing_csv(csv_path, storage)
-    existing_codes = set(existing_df["code"].unique()) if not existing_df.empty else set()
-    collected_dates = set(existing_df["date"].unique()) if not existing_df.empty else set()
+    # Parquet에서 현재 연도 기존 데이터 로드
+    repo = get_repository()
+    existing_stocks, existing_prices_by_code = repo.load_year(year)
+    existing_codes = {s.code for s in existing_stocks}
+    # 이미 수집된 날짜 추출 (전체 종목 기준 합집합)
+    collected_dates: set[str] = set()
+    for price_list in existing_prices_by_code.values():
+        for dp in price_list:
+            collected_dates.add(dp.date.strftime("%Y-%m-%d"))
 
     # ── Step 3: 처리 대상 날짜 계산 ─────────────────────────────────────────
     target_dates = [(end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
@@ -381,30 +387,57 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
     else:
         logger.info("[5/6] 신규 종목 없음 (skip)")
 
-    # ── Step 6: CSV append → Excel 재생성 ────────────────────────────────────
+    # ── Step 6: Parquet append → CSV append → Excel 재생성 ──────────────────
     logger.info("[6/6] 파일 저장 중...")
 
-    if not all_new_rows and existing_df.empty:
-        logger.warning("추가할 데이터 없음.")
-        return False
+    if not all_new_rows:
+        if not existing_stocks:
+            logger.warning("추가할 데이터 없음.")
+            return False
+        # 신규 행 없어도 Excel은 재생성 (release_date 동기화 반영)
+        logger.info("  신규 행 없음. Excel 재생성만 수행.")
+        final_stocks, final_prices = existing_stocks, existing_prices_by_code
+    else:
+        # 신규 행을 DailyPriceData & InvestmentWarningStock으로 변환
+        new_stocks_map: dict[str, InvestmentWarningStock] = {s.code: s for s in filtered}
+        new_prices_map: dict[str, list[DailyPriceData]] = {}
+        for row in all_new_rows:
+            code = row["code"]
+            stock = new_stocks_map.get(code)
+            if stock is None:
+                continue
+            dp = DailyPriceData(
+                code=code,
+                name=row["name"],
+                date=datetime.strptime(row["date"], "%Y-%m-%d"),
+                close=float(row["close"]),
+                change_rate=float(row["change_rate"]),
+            )
+            new_prices_map.setdefault(code, []).append(dp)
 
-    new_df = pd.DataFrame(all_new_rows) if all_new_rows else pd.DataFrame()
-    updated_df = (
-        pd.concat([existing_df, new_df], ignore_index=True)
-        .drop_duplicates(subset=["code", "designation_date", "date"])
-        .sort_values(["code", "designation_date", "date"])
-        .reset_index(drop=True)
-    )
+        storage.ensure_directory(OUTPUT_DIR)
 
-    storage.ensure_directory(OUTPUT_DIR)
-    if not storage.save_dataframe_csv(updated_df, csv_path):
-        return False
+        # Parquet 증분 저장
+        repo.append_year(year, list(new_stocks_map.values()), new_prices_map)
+        logger.info(f"  Parquet 증분 저장: {PARQUET_DIR}/{year}.parquet (+{len(all_new_rows)}행)")
 
-    logger.info(f"  CSV 저장 완료: {os.path.basename(csv_path)} ({len(updated_df):,}행, +{len(all_new_rows)}행 추가)")
+        # CSV 하위 호환 저장 (기존 방식 유지)
+        new_df = pd.DataFrame(all_new_rows)
+        csv_path = _csv_path(year)
+        prev_csv = _load_existing_csv(csv_path, storage)
+        updated_df = (
+            pd.concat([prev_csv, new_df], ignore_index=True)
+            .drop_duplicates(subset=["code", "designation_date", "date"])
+            .sort_values(["code", "designation_date", "date"])
+            .reset_index(drop=True)
+        )
+        storage.save_dataframe_csv(updated_df, csv_path)
+        logger.info(f"  CSV 저장: {os.path.basename(csv_path)} ({len(updated_df):,}행)")
 
-    # Excel은 전체 최신 데이터로 재생성 (wide format 특성상 전체 재작성 필요)
-    restored_filtered, restored_prices = _restore_from_df(updated_df)
-    _save_excel(year, restored_filtered, restored_prices, storage)
+        # Excel 재생성용 최신 Parquet 로드
+        final_stocks, final_prices = repo.load_year(year)
+
+    _save_excel(year, final_stocks, final_prices, storage)
 
     logger.info(
         f"[완료] 신규 {len(new_stocks)}종목 전체 수집 / 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 추가"
