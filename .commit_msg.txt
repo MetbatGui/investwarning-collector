@@ -1,13 +1,19 @@
-﻿feat: cli.py 수정 및 유닛 테스트 추가
+﻿chore: prod 레벨 코드 품질 검증 적용
 
-- cli.py: 삭제된 모듈(CollectionService 등) 참조 제거
-  - _get_collection_service 제거 → _setup_storage 헬퍼로 교체
-  - cmd_today: collect_today.collect_today() 직접 호출
-  - cmd_year: collect_yearly_warnings.collect_year() 직접 호출
-  - 미래 날짜 수집 시도 시 조기 오류 반환 추가
-- tests/ 유닛 테스트 추가 (54개, 1.71s)
-  - test_domain_models.py: InvestmentWarningStock, DailyPriceData
-  - test_domain_services.py: calculate_returns (에지케이스 포함)
-  - test_local_storage_adapter.py: CSV/Excel/Bytes I/O 왕복 테스트
-  - test_collect_helpers.py: _filter_stocks, _make_row, _restore_from_df
-- dev 의존성: pytest, pytest-mock 추가
+- ruff (lint + format): 220개+ 오류 수정
+  - F401 미사용 import 제거
+  - I001 import 정렬
+  - W293/W291 trailing whitespace 제거
+  - E701/E722/F841 코드 스타일 수정
+  - B904 exception chaining (from e)
+- mypy: 20개 타입 오류 수정
+  - Optional 타입 어노테이션 명시 (str | None)
+  - TypedDict(_StockPeriod) 추가 (daily_price_collector.py)
+  - calculate_returns 반환 타입 명시
+  - BeautifulSoup 타입 안전화
+- bandit: No Medium/High issues
+  - B501 (SSL verify=False) nosec + timeout=30 추가
+- pyproject.toml 정비
+  - seaborn 미사용 패키지 제거
+  - ruff/mypy/pytest/coverage 도구 설정 추가
+- dev 의존성 추가: mypy, pytest-cov, bandit, types-requests

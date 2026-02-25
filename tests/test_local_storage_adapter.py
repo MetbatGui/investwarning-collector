@@ -1,9 +1,9 @@
 """
 LocalStorageAdapter 유닛 테스트 (실제 파일 I/O, tmp 디렉토리 사용)
 """
-import pytest
+
 import pandas as pd
-from pathlib import Path
+import pytest
 
 from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
 
@@ -16,16 +16,19 @@ def adapter(tmp_path):
 
 @pytest.fixture
 def sample_df():
-    return pd.DataFrame({
-        "code": ["000001", "000002"],
-        "name": ["A", "B"],
-        "close": [10000, 20000],
-    })
+    return pd.DataFrame(
+        {
+            "code": ["000001", "000002"],
+            "name": ["A", "B"],
+            "close": [10000, 20000],
+        }
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # path_exists
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestPathExists:
     def test_existing_file(self, adapter, tmp_path):
@@ -40,6 +43,7 @@ class TestPathExists:
 # ─────────────────────────────────────────────────────────────────────────────
 # CSV 저장 / 로드 왕복 테스트
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestCsvRoundtrip:
     def test_save_and_load_csv(self, adapter, sample_df):
@@ -70,6 +74,7 @@ class TestCsvRoundtrip:
 # Excel 저장 / 로드 왕복 테스트
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestExcelRoundtrip:
     def test_save_and_load_excel(self, adapter, sample_df):
         result = adapter.save_dataframe_excel(sample_df, "output/test.xlsx", index=False)
@@ -86,6 +91,7 @@ class TestExcelRoundtrip:
 # ensure_directory
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestEnsureDirectory:
     def test_creates_directory(self, adapter, tmp_path):
         result = adapter.ensure_directory("new_folder")
@@ -101,6 +107,7 @@ class TestEnsureDirectory:
 # ─────────────────────────────────────────────────────────────────────────────
 # get_file / put_file (bytes I/O)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestBytesIO:
     def test_put_and_get_file(self, adapter, tmp_path):

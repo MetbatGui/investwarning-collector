@@ -1,7 +1,7 @@
 [project]
 name = "investment-hub"
 version = "0.1.0"
-description = "Add your description here"
+description = "KRX 투자경고종목 시세 자동 수집기"
 readme = "README.md"
 authors = [{ name = "metbatgui-dev", email = "metbatguidev@gmail.com" }]
 requires-python = ">=3.12"
@@ -14,7 +14,6 @@ dependencies = [
     "pandas>=2.3.3",
     "pykrx>=1.2.3",
     "requests>=2.32.5",
-    "seaborn>=0.13.2",
     "xlsxwriter>=3.2.9",
 ]
 
@@ -27,7 +26,55 @@ members = ["packages/*"]
 
 [dependency-groups]
 dev = [
+    "bandit>=1.9.3",
+    "mypy>=1.19.1",
     "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
     "pytest-mock>=3.15.1",
     "ruff>=0.15.2",
+    "types-requests>=2.32.4.20260107",
 ]
+
+# ─── Ruff ────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # test 파일은 mock 설정 후 import 허용
+
+# ─── Mypy ────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+# 서드파티 라이브러리 stub이 없는 경우가 많으므로 완화 설정
+disallow_untyped_defs = false
+
+# ─── Pytest ──────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+# ─── Coverage ────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+source = ["investment_hub"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

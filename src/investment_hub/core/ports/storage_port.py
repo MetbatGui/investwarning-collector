@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Optional, List
-import pandas as pd
+
 import openpyxl
+import pandas as pd
+
 
 class StoragePort(ABC):
     """저장소 인터페이스 (Port)"""
@@ -22,12 +23,12 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def load_workbook(self, path: str) -> Optional[openpyxl.Workbook]:
+    def load_workbook(self, path: str) -> openpyxl.Workbook | None:
         """지정된 경로에서 Excel Workbook을 로드합니다."""
         pass
 
     @abstractmethod
-    def load_dataframe(self, path: str, sheet_name: str = None, **kwargs) -> pd.DataFrame:
+    def load_dataframe(self, path: str, sheet_name: str | None = None, **kwargs) -> pd.DataFrame:
         """지정된 경로에서 DataFrame을 로드합니다."""
         pass
 
@@ -42,7 +43,7 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
-    def get_file(self, path: str) -> Optional[bytes]:
+    def get_file(self, path: str) -> bytes | None:
         """파일의 내용을 바이트로 읽어옵니다."""
         pass
 

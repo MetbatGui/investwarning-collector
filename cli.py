@@ -1,14 +1,13 @@
 import argparse
-import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 저장소 설정 헬퍼 (Composition Root)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _setup_storage(args: argparse.Namespace) -> None:
     """CLI 인자에 따라 저장소 어댑터를 생성하고 전역 storage로 설정합니다."""
@@ -17,6 +16,7 @@ def _setup_storage(args: argparse.Namespace) -> None:
     storage_type = getattr(args, "storage", "local")
     if storage_type == "drive":
         from investment_hub.infrastructure.adapters.google_drive_adapter import GoogleDriveAdapter
+
         token_file = getattr(args, "token_file", "secrets/token.json")
         client_secret = getattr(args, "client_secret", "secrets/client_secret.json")
         drive_folder = getattr(args, "drive_folder", "KRX_Auto_Crawling_Data")
@@ -36,6 +36,7 @@ def _setup_storage(args: argparse.Namespace) -> None:
 # 서브커맨드 핸들러
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def cmd_today(args: argparse.Namespace) -> int:
     """오늘(또는 지정 날짜) 증분 수집"""
     _setup_storage(args)
@@ -52,6 +53,7 @@ def cmd_today(args: argparse.Namespace) -> int:
         return 1
 
     from collect_today import collect_today
+
     ok = collect_today(
         end_date=target_date,
         days=args.days,
@@ -64,7 +66,7 @@ def cmd_year(args: argparse.Namespace) -> int:
     """연도 범위 수집"""
     _setup_storage(args)
 
-    from collect_yearly_warnings import collect_year, YEAR_RANGES
+    from collect_yearly_warnings import YEAR_RANGES, collect_year
 
     if args.year:
         years = [args.year]
@@ -79,18 +81,18 @@ def cmd_year(args: argparse.Namespace) -> int:
         print("[오류] 수집할 연도가 없습니다.")
         return 1
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  연도별 데이터 수집: {valid_years}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     results = {}
     for year in valid_years:
         ok = collect_year(year, include_active=args.include_active)
         results[year] = "[완료]" if ok else "[실패/데이터없음]"
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  최종 결과 요약")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     for year, status in results.items():
         print(f"  {year}년: {status}")
 
@@ -126,10 +128,13 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
 
     elif action == "status":
         result = subprocess.run(
-            ["powershell", "-Command",
-             f"$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; "
-             f"if ($t) {{ Write-Host '[등록됨]' $t.TaskName $t.State }} "
-             f"else {{ Write-Host '[미등록] {task_name} 스케줄이 없습니다.' }}"],
+            [
+                "powershell",
+                "-Command",
+                f"$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; "
+                f"if ($t) {{ Write-Host '[등록됨]' $t.TaskName $t.State }} "
+                f"else {{ Write-Host '[미등록] {task_name} 스케줄이 없습니다.' }}",
+            ],
             capture_output=False,
         )
         return result.returncode
@@ -140,6 +145,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI 파서 정의
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -163,20 +169,25 @@ def build_parser() -> argparse.ArgumentParser:
     # 공통 저장소 인자 부모 파서
     storage_parser = argparse.ArgumentParser(add_help=False)
     storage_parser.add_argument(
-        "--storage", choices=["local", "drive"], default="local",
-        help="저장 방식 선택 (local: 로컬 파일, drive: 구글 드라이브)"
+        "--storage",
+        choices=["local", "drive"],
+        default="local",
+        help="저장 방식 선택 (local: 로컬 파일, drive: 구글 드라이브)",
     )
     storage_parser.add_argument(
-        "--token-file", dest="token_file", default="secrets/token.json",
-        help="Google Drive 전용: 인증 토큰 파일 경로"
+        "--token-file", dest="token_file", default="secrets/token.json", help="Google Drive 전용: 인증 토큰 파일 경로"
     )
     storage_parser.add_argument(
-        "--client-secret", dest="client_secret", default="secrets/client_secret.json",
-        help="Google Drive 전용: 클라이언트 비밀 파일 경로"
+        "--client-secret",
+        dest="client_secret",
+        default="secrets/client_secret.json",
+        help="Google Drive 전용: 클라이언트 비밀 파일 경로",
     )
     storage_parser.add_argument(
-        "--drive-folder", dest="drive_folder", default="KRX_Auto_Crawling_Data",
-        help="Google Drive 전용: 루트 폴더 이름"
+        "--drive-folder",
+        dest="drive_folder",
+        default="KRX_Auto_Crawling_Data",
+        help="Google Drive 전용: 루트 폴더 이름",
     )
 
     subparsers = parser.add_subparsers(dest="command", metavar="<command>")
@@ -197,11 +208,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="수집 마지막 날짜 (기본: 오늘)",
     )
     p_today.add_argument(
-        "--days", type=int, default=1, metavar="N",
+        "--days",
+        type=int,
+        default=1,
+        metavar="N",
         help="수집할 최근 일수 (기본: 1)",
     )
     p_today.add_argument(
-        "--include-active", dest="include_active", action="store_true",
+        "--include-active",
+        dest="include_active",
+        action="store_true",
         help="해제일 없는 진행 중 종목도 포함",
     )
     p_today.set_defaults(func=cmd_today)
@@ -219,7 +235,9 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument("--start", type=int, default=2020, metavar="YYYY", help="시작 연도 (기본: 2020)")
     p_year.add_argument("--end", type=int, default=datetime.now().year, metavar="YYYY", help="종료 연도 (기본: 올해)")
     p_year.add_argument(
-        "--include-active", dest="include_active", action="store_true",
+        "--include-active",
+        dest="include_active",
+        action="store_true",
         help="해제일 없는 진행 중 종목도 포함",
     )
     p_year.set_defaults(func=cmd_year)
@@ -243,6 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
 # ─────────────────────────────────────────────────────────────────────────────
 # 진입점
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def main():
     parser = build_parser()

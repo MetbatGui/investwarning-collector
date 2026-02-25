@@ -19,25 +19,23 @@ import logging
 import os
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 
 # collect_yearly_warnings.py에서 공통 상수·저장 함수만 재사용
 sys.path.insert(0, os.path.dirname(__file__))
 from collect_yearly_warnings import (
-    OUTPUT_DIR,
     MAX_WARNING_DAYS,
+    OUTPUT_DIR,
     TRADING_DAYS_AFTER_RELEASE,
     _save_excel,
     get_storage,
 )
-from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 from investment_hub.core.ports.storage_port import StoragePort
+from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 로깅 설정
@@ -72,6 +70,7 @@ def setup_logging(date_str: str) -> logging.Logger:
 # ─────────────────────────────────────────────────────────────────────────────
 # 헬퍼 함수
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _csv_path(year: int) -> str:
     return os.path.join(OUTPUT_DIR, f"투자경고종목분석({year}년).csv")
@@ -161,25 +160,29 @@ def _restore_from_df(df: pd.DataFrame) -> tuple:
         release_str = row.get("release_date", "")
         release_dt = pd.to_datetime(release_str) if release_str and release_str not in ("", "nan") else None
 
-        filtered.append(InvestmentWarningStock(
-            code=str(row["code"]),
-            name=row["name"],
-            market=row["market"],
-            designation_date=pd.to_datetime(row["designation_date"]),
-            release_date=release_dt,
-        ))
+        filtered.append(
+            InvestmentWarningStock(
+                code=str(row["code"]),
+                name=row["name"],
+                market=row["market"],
+                designation_date=pd.to_datetime(row["designation_date"]),
+                release_date=release_dt,
+            )
+        )
 
     # code별 전체 시세 (복수 지정 이력이 있어도 합산)
     for code, group in df.groupby("code"):
         prices = []
         for _, row in group.iterrows():
-            prices.append(DailyPriceData(
-                code=str(code),
-                name=row["name"],
-                date=pd.to_datetime(row["date"]),
-                close=float(row["close"]),
-                change_rate=float(row["change_rate"]),
-            ))
+            prices.append(
+                DailyPriceData(
+                    code=str(code),
+                    name=row["name"],
+                    date=pd.to_datetime(row["date"]),
+                    close=float(row["close"]),
+                    change_rate=float(row["change_rate"]),
+                )
+            )
         daily_prices[str(code)] = prices
 
     return filtered, daily_prices
@@ -188,6 +191,7 @@ def _restore_from_df(df: pd.DataFrame) -> tuple:
 # ─────────────────────────────────────────────────────────────────────────────
 # release_date 동기화
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _sync_release_dates(
     year: int,
@@ -203,8 +207,7 @@ def _sync_release_dates(
 
     # KRX 최신 release_date 매핑 구성
     krx_release: dict[str, str] = {
-        s.code: (s.release_date.strftime("%Y-%m-%d") if s.release_date else "")
-        for s in all_filtered
+        s.code: (s.release_date.strftime("%Y-%m-%d") if s.release_date else "") for s in all_filtered
     }
 
     for target_year in (year - 1, year):
@@ -244,6 +247,7 @@ def _sync_release_dates(
 # 핵심 함수: 진짜 증분 수집
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def collect_today(end_date: str, days: int = 1, include_active: bool = False) -> bool:
     """
     진짜 증분 수집 + release_date 동기화.
@@ -274,17 +278,11 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
     # 이전 연도 미해제 종목 감지 → 조회 시작일 확장
     prev_csv_path = _csv_path(year - 1)
     prev_df_prefetch = _load_existing_csv(prev_csv_path, storage)
-    cross_year_unsettled = (
-        not prev_df_prefetch.empty
-        and (prev_df_prefetch["release_date"] == "").any()
-    )
+    cross_year_unsettled = not prev_df_prefetch.empty and (prev_df_prefetch["release_date"] == "").any()
 
     query_start = f"{year - 1}-01-01" if cross_year_unsettled else year_start
     if cross_year_unsettled:
-        logger.info(
-            f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date})"
-            f" ← {year-1}년 미해제 종목 감지, 범위 확장"
-        )
+        logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장")
     else:
         logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date})...")
 
@@ -297,10 +295,7 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
     # 전체 필터링 (연도 무관 — release_date 동기화용)
     all_filtered = _filter_stocks(stock_list, query_start, end_date, include_active)
     # 현재 연도 종목만 (시세 수집용)
-    filtered = [
-        s for s in all_filtered
-        if s.designation_date >= pd.to_datetime(year_start)
-    ]
+    filtered = [s for s in all_filtered if s.designation_date >= pd.to_datetime(year_start)]
     logger.info(f"  → 전체 {len(all_filtered)}종목 / {year}년 대상 {len(filtered)}종목")
 
     if not all_filtered:
@@ -318,10 +313,7 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
     collected_dates = set(existing_df["date"].unique()) if not existing_df.empty else set()
 
     # ── Step 3: 처리 대상 날짜 계산 ─────────────────────────────────────────
-    target_dates = [
-        (end_dt - timedelta(days=i)).strftime("%Y-%m-%d")
-        for i in range(days - 1, -1, -1)
-    ]
+    target_dates = [(end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
     missing_dates = [d for d in target_dates if d not in collected_dates]
     logger.info(f"[3/6] 누락 날짜: {missing_dates} ({len(missing_dates)}/{days}일)")
 
@@ -379,7 +371,8 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
             for dp in new_prices.get(stock_info.code, []):
                 all_new_rows.append(
                     _make_row(
-                        year, stock_info,
+                        year,
+                        stock_info,
                         dp.date.strftime("%Y-%m-%d"),
                         int(dp.close),
                         dp.change_rate,
@@ -414,8 +407,7 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
     _save_excel(year, restored_filtered, restored_prices, storage)
 
     logger.info(
-        f"[완료] 신규 {len(new_stocks)}종목 전체 수집 / "
-        f"기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 추가"
+        f"[완료] 신규 {len(new_stocks)}종목 전체 수집 / 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 추가"
     )
     logger.info("=" * 60)
     return True
@@ -424,6 +416,7 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
 # ─────────────────────────────────────────────────────────────────────────────
 # 진입점 (cli.py 경유 권장, 직접 실행도 가능)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _parse_args():
     parser = argparse.ArgumentParser(

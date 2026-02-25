@@ -1,5 +1,4 @@
-
-def calculate_returns(prices_by_idx: dict, release_idx: int):
+def calculate_returns(prices_by_idx: dict, release_idx: int | None) -> tuple[float | None, float | None]:
     """
     투자경고 지정/해제 전후의 수익률을 계산합니다.
     - pre_return: 지정일(D+0) 대비 해제 전날 종가 기준

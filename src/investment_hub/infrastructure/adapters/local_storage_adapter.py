@@ -1,10 +1,10 @@
-import os
-import shutil
-from typing import Optional, List
 from pathlib import Path
-import pandas as pd
+
 import openpyxl
+import pandas as pd
+
 from investment_hub.core.ports.storage_port import StoragePort
+
 
 class LocalStorageAdapter(StoragePort):
     """로컬 파일 시스템 저장소 어댑터"""
@@ -19,7 +19,7 @@ class LocalStorageAdapter(StoragePort):
         """DataFrame을 Excel 파일로 로컬에 원자적으로 저장합니다."""
         full_path = self._full_path(path)
         self.ensure_directory(str(full_path.parent))
-        
+
         tmp_path = full_path.with_suffix(".tmp.xlsx")
         try:
             df.to_excel(str(tmp_path), **kwargs)
@@ -43,7 +43,7 @@ class LocalStorageAdapter(StoragePort):
         """DataFrame을 CSV 파일로 로컬에 원자적으로 저장합니다."""
         full_path = self._full_path(path)
         self.ensure_directory(str(full_path.parent))
-        
+
         tmp_path = full_path.with_suffix(".tmp.csv")
         try:
             # 기본 인코딩 utf-8-sig (엑셀 호환성)
@@ -62,7 +62,7 @@ class LocalStorageAdapter(StoragePort):
         """Workbook 객체를 로컬에 원자적으로 저장합니다."""
         full_path = self._full_path(path)
         self.ensure_directory(str(full_path.parent))
-        
+
         tmp_path = full_path.with_suffix(".tmp.xlsx")
         try:
             book.save(str(tmp_path))
@@ -82,7 +82,7 @@ class LocalStorageAdapter(StoragePort):
             print(f"[LocalStorage] [ERROR] Workbook 저장 실패 ({path}): {e}")
             return False
 
-    def load_workbook(self, path: str) -> Optional[openpyxl.Workbook]:
+    def load_workbook(self, path: str) -> openpyxl.Workbook | None:
         """로컬에서 Workbook 로드"""
         full_path = self._full_path(path)
         if not full_path.exists():
@@ -93,14 +93,14 @@ class LocalStorageAdapter(StoragePort):
             print(f"[LocalStorage] [ERROR] Workbook 로드 실패 ({path}): {e}")
             return None
 
-    def load_dataframe(self, path: str, sheet_name: str = None, **kwargs) -> pd.DataFrame:
+    def load_dataframe(self, path: str, sheet_name: str | None = None, **kwargs) -> pd.DataFrame:
         """로컬에서 DataFrame 로드 (CSV 또는 Excel)"""
         full_path = self._full_path(path)
         if not full_path.exists():
             return pd.DataFrame()
-        
+
         try:
-            if full_path.suffix.lower() == '.csv':
+            if full_path.suffix.lower() == ".csv":
                 return pd.read_csv(str(full_path), **kwargs)
             else:
                 target_sheet = 0 if sheet_name is None else sheet_name
@@ -123,7 +123,7 @@ class LocalStorageAdapter(StoragePort):
             print(f"[LocalStorage] [ERROR] 디렉토리 생성 실패 ({path}): {e}")
             return False
 
-    def get_file(self, path: str) -> Optional[bytes]:
+    def get_file(self, path: str) -> bytes | None:
         """로컬 파일 바이트 읽기"""
         full_path = self._full_path(path)
         if not full_path.exists():

@@ -1,7 +1,9 @@
 """
 domain/services.py — calculate_returns 유닛 테스트
 """
+
 import pytest
+
 from investment_hub.domain.services import calculate_returns
 
 
@@ -11,7 +13,6 @@ def _ptd(*prices):
 
 
 class TestCalculateReturns:
-
     def test_both_none_when_no_release(self):
         ptd = _ptd(10000, 11000, 12000)
         pre, post = calculate_returns(ptd, release_idx=None)
@@ -63,7 +64,10 @@ class TestCalculateReturns:
 
     def test_zero_d0_price_returns_none_pre(self):
         # D+0 종가가 0이면 pre_return None
-        ptd = {0: {"close": 0, "change_rate": 0}, 1: {"close": 5000, "change_rate": 0},
-               2: {"close": 6000, "change_rate": 0}}
+        ptd = {
+            0: {"close": 0, "change_rate": 0},
+            1: {"close": 5000, "change_rate": 0},
+            2: {"close": 6000, "change_rate": 0},
+        }
         pre, post = calculate_returns(ptd, release_idx=2)
         assert pre is None

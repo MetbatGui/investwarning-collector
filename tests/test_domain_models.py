@@ -1,14 +1,17 @@
 """
 InvestmentWarningStock, DailyPriceData 도메인 모델 유닛 테스트
 """
-import pytest
-from datetime import datetime
-from investment_hub.domain.models import InvestmentWarningStock, DailyPriceData
 
+from datetime import datetime
+
+import pytest
+
+from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 픽스처
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def active_stock():
@@ -38,6 +41,7 @@ def released_stock():
 # is_active
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestIsActive:
     def test_active_when_no_release_date(self, active_stock):
         assert active_stock.is_active is True
@@ -49,6 +53,7 @@ class TestIsActive:
 # ─────────────────────────────────────────────────────────────────────────────
 # warning_days
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestWarningDays:
     def test_none_when_active(self, active_stock):
@@ -62,6 +67,7 @@ class TestWarningDays:
 # ─────────────────────────────────────────────────────────────────────────────
 # is_warning_duration_valid
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestIsWarningDurationValid:
     def test_active_always_valid(self, active_stock):
@@ -95,6 +101,7 @@ class TestIsWarningDurationValid:
 # ─────────────────────────────────────────────────────────────────────────────
 # is_collectible_at
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestIsCollectibleAt:
     """해제일 + 3 영업일 원칙 검증"""
@@ -147,6 +154,7 @@ class TestIsCollectibleAt:
 # to_dict
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestToDict:
     def test_active_stock_to_dict(self, active_stock):
         d = active_stock.to_dict()
@@ -162,6 +170,7 @@ class TestToDict:
 # ─────────────────────────────────────────────────────────────────────────────
 # DailyPriceData
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestDailyPriceData:
     def test_to_dict(self):

@@ -1,13 +1,13 @@
 import os
-import pandas as pd
 from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment
-from openpyxl.utils import get_column_letter
 
-from investment_hub.domain.models import InvestmentWarningStock, DailyPriceData
-from investment_hub.domain.services import calculate_returns
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+
 from investment_hub.core.ports.storage_port import StoragePort
+from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
+from investment_hub.domain.services import calculate_returns
 
 
 def restore_stocks_and_prices_from_df(df: pd.DataFrame):
@@ -22,7 +22,9 @@ def restore_stocks_and_prices_from_df(df: pd.DataFrame):
             name=str(row["name"]),
             market=str(row["market"]),
             designation_date=pd.to_datetime(row["designation_date"]),
-            release_date=pd.to_datetime(row["release_date"]) if pd.notna(row["release_date"]) and row["release_date"] != "" else None
+            release_date=pd.to_datetime(row["release_date"])
+            if pd.notna(row["release_date"]) and row["release_date"] != ""
+            else None,
         )
 
     prices_dict = {}
@@ -33,8 +35,9 @@ def restore_stocks_and_prices_from_df(df: pd.DataFrame):
                 name=str(row["name"]),
                 date=pd.to_datetime(row["date"]),
                 close=float(row["close"]),
-                change_rate=float(row["change_rate"])
-            ) for _, row in group.iterrows()
+                change_rate=float(row["change_rate"]),
+            )
+            for _, row in group.iterrows()
         ]
     return list(stocks_dict.values()), prices_dict
 
@@ -44,7 +47,7 @@ def save_investment_warning_excel(
     stocks: list,  # InvestmentWarningStock
     prices_by_code: dict,  # code -> list[DailyPriceData]
     storage: StoragePort,
-    output_dir: str = "output"
+    output_dir: str = "output",
 ):
     """투자경고 종목 분석 데이터를 엑셀로 저장 (Rich Format)"""
     wb = Workbook()
@@ -54,16 +57,15 @@ def save_investment_warning_excel(
     # [1] 데이터 전처리 (D+n 매핑 및 수익률 계산)
     rows_data = []
     max_days = 0
-    
+
     for s in sorted(stocks, key=lambda x: x.designation_date or datetime.min):
         prices = sorted(prices_by_code.get(s.code, []), key=lambda x: x.date)
         if not prices:
             continue
-            
-        d0 = prices[0].date
+
         ptd = {}  # index -> price_info
         release_idx = None
-        
+
         for i, p in enumerate(prices):
             idx = i  # 영업일 순서 (D+0, D+1, ...)
             ptd[idx] = {"close": p.close, "change_rate": p.change_rate}
@@ -71,18 +73,20 @@ def save_investment_warning_excel(
             # 해제일 인덱스 확인
             if s.release_date and p.date.date() == s.release_date.date():
                 release_idx = idx
-                
+
         # 수익률 계산 (도메인 서비스 활용)
         pre_return, post_return = calculate_returns(ptd, release_idx)
-                    
-        rows_data.append({
-            "stock": s,
-            "ptd": ptd,
-            "release_idx": release_idx,
-            "pre_return": pre_return,
-            "post_return": post_return,
-            "warning_days": (s.release_date - s.designation_date).days if s.release_date else None
-        })
+
+        rows_data.append(
+            {
+                "stock": s,
+                "ptd": ptd,
+                "release_idx": release_idx,
+                "pre_return": pre_return,
+                "post_return": post_return,
+                "warning_days": (s.release_date - s.designation_date).days if s.release_date else None,
+            }
+        )
 
     # [2] 헤더 작성
     base_headers = ["종목명", "종목코드", "시장", "지정일", "해제일", "경고일수", "지정이후 수익률", "해제이후 수익률"]
@@ -105,27 +109,30 @@ def save_investment_warning_excel(
     for data in rows_data:
         s = data["stock"]
         row = [
-            s.name, s.code, s.market,
+            s.name,
+            s.code,
+            s.market,
             s.designation_date.strftime("%Y-%m-%d") if s.designation_date else "",
             s.release_date.strftime("%Y-%m-%d") if s.release_date else "진행중",
             data["warning_days"],
             data["pre_return"],
-            data["post_return"]
+            data["post_return"],
         ]
-        
+
         ptd = data["ptd"]
         for d in range(max_days + 1):
             row.append(ptd[d]["close"] if d in ptd else None)
-            
+
         ws.append(row)
         curr_row = ws.max_row
-        
+
         # 상한가 및 해제일 강조
         for d in range(max_days + 1):
-            if d not in ptd: continue
+            if d not in ptd:
+                continue
             col_idx = base_col_count + d + 1
             cell = ws.cell(row=curr_row, column=col_idx)
-            
+
             if ptd[d]["change_rate"] >= 29.9:
                 cell.fill = red_fill
             if d == data["release_idx"]:
@@ -140,7 +147,8 @@ def save_investment_warning_excel(
             try:
                 if len(str(cell.value)) > max_length:
                     max_length = len(str(cell.value))
-            except: pass
+            except Exception:
+                pass
         ws.column_dimensions[column].width = min(max_length + 2, 30)
 
     # 틀 고정

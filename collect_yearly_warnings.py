@@ -13,32 +13,32 @@ output/ 디렉토리에 CSV 및 Excel 파일로 저장합니다.
 import argparse
 import os
 from datetime import datetime
-from pathlib import Path
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
-from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
-
+from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
+from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 설정
 # ─────────────────────────────────────────────────────────────────────────────
 OUTPUT_DIR = "output"
-MAX_WARNING_DAYS = 60   # 60일 이하 경고 종목만 수집
+MAX_WARNING_DAYS = 60  # 60일 이하 경고 종목만 수집
 TRADING_DAYS_AFTER_RELEASE = 3  # 해제일 이후 추가 수집일
 
 # 기본 저장소로 LocalStorageAdapter 사용
 _storage: StoragePort = LocalStorageAdapter()
 
+
 def set_storage(storage_adapter: StoragePort):
     global _storage
     _storage = storage_adapter
+
 
 def get_storage() -> StoragePort:
     return _storage
@@ -56,12 +56,14 @@ def _build_year_ranges() -> dict:
     ranges[current_year] = (f"{current_year}-01-01", today)
     return ranges
 
+
 YEAR_RANGES = _build_year_ranges()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 핵심 함수
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def collect_year(year: int, include_active: bool = False) -> bool:
     """
@@ -78,11 +80,11 @@ def collect_year(year: int, include_active: bool = False) -> bool:
         return False
 
     start_date, end_date = YEAR_RANGES[year]
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  {year}년 투자경고종목 수집 시작")
     print(f"  기간: {start_date} ~ {end_date}")
     print(f"  진행 중 종목 포함: {'예' if include_active else '아니오'}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # ── Step 1: 투자경고 지정 목록 수집 ──────────────────────────────────────
     print("\n[1/4] KRX KIND에서 투자경고 목록 수집 중...")
@@ -193,28 +195,26 @@ def _build_rows(filtered: list, daily_prices_by_code: dict) -> tuple[list, int]:
             # 2) 해제일 당일 거래정지(데이터 없거나 종가=0)이면 그 이후 첫 정상 거래일을 사용
             if release_date:
                 if dp.date.date() == release_date.date() and dp.close > 0:
-                    new_release_trading_day = i   # 해제일 당일 정상 거래
-                elif (
-                    new_release_trading_day is None
-                    and dp.date.date() > release_date.date()
-                    and dp.close > 0
-                ):
+                    new_release_trading_day = i  # 해제일 당일 정상 거래
+                elif new_release_trading_day is None and dp.date.date() > release_date.date() and dp.close > 0:
                     # 해제일이 거래정지 → 해제 이후 첫 정상 거래일
                     new_release_trading_day = i
 
         if prices_by_trading_day:
             max_days = max(max_days, len(prices_by_trading_day) - 1)
 
-        rows_data.append({
-            "name": stock_info.name,
-            "code": code,
-            "market": stock_info.market,
-            "designation_date": designation_date.strftime("%Y-%m-%d") if designation_date else "",
-            "release_date": release_date.strftime("%Y-%m-%d") if release_date else "진행중",
-            "warning_days": (release_date - designation_date).days if release_date else None,
-            "prices_by_trading_day": prices_by_trading_day,
-            "release_trading_day": new_release_trading_day,
-        })
+        rows_data.append(
+            {
+                "name": stock_info.name,
+                "code": code,
+                "market": stock_info.market,
+                "designation_date": designation_date.strftime("%Y-%m-%d") if designation_date else "",
+                "release_date": release_date.strftime("%Y-%m-%d") if release_date else "진행중",
+                "warning_days": (release_date - designation_date).days if release_date else None,
+                "prices_by_trading_day": prices_by_trading_day,
+                "release_trading_day": new_release_trading_day,
+            }
+        )
 
     return rows_data, max_days
 
@@ -234,7 +234,7 @@ def _calc_returns(row_data: dict) -> tuple:
     # 해제일이 지정일 이후여야 함 (최소 D+1)
     if release_day is not None and release_day > 0:
         prev_day = release_day - 1
-        
+
         # 1. 해제전 등락률 (지정일 종가 -> 해제 전날 종가)
         if 0 in ptd and prev_day in ptd:
             d0_price = ptd[0]["close"]
@@ -259,17 +259,21 @@ def _save_csv(year: int, filtered: list, daily_prices_by_code: dict, storage: St
         code = stock_info.code
         prices = daily_prices_by_code.get(code, [])
         for dp in sorted(prices, key=lambda x: x.date):
-            records.append({
-                "year": year,
-                "code": code,
-                "name": stock_info.name,
-                "market": stock_info.market,
-                "designation_date": stock_info.designation_date.strftime("%Y-%m-%d") if stock_info.designation_date else "",
-                "release_date": stock_info.release_date.strftime("%Y-%m-%d") if stock_info.release_date else "",
-                "date": dp.date.strftime("%Y-%m-%d"),
-                "close": dp.close,
-                "change_rate": dp.change_rate,
-            })
+            records.append(
+                {
+                    "year": year,
+                    "code": code,
+                    "name": stock_info.name,
+                    "market": stock_info.market,
+                    "designation_date": stock_info.designation_date.strftime("%Y-%m-%d")
+                    if stock_info.designation_date
+                    else "",
+                    "release_date": stock_info.release_date.strftime("%Y-%m-%d") if stock_info.release_date else "",
+                    "date": dp.date.strftime("%Y-%m-%d"),
+                    "close": dp.close,
+                    "change_rate": dp.change_rate,
+                }
+            )
 
     if not records:
         print("  CSV: 저장할 데이터 없음")
@@ -294,8 +298,14 @@ def _save_excel(year: int, filtered: list, daily_prices_by_code: dict, storage: 
 
     # ── 헤더 ──────────────────────────────────────────────────────────────────
     base_headers = [
-        "종목명", "종목코드", "시장", "지정일", "해제일",
-        "경고일수", "해제전등락률(%)", "해제직후등락률(%)"
+        "종목명",
+        "종목코드",
+        "시장",
+        "지정일",
+        "해제일",
+        "경고일수",
+        "해제전등락률(%)",
+        "해제직후등락률(%)",
     ]
     day_headers = [f"D+{d}" for d in range(max_days + 1)]
     header = base_headers + day_headers
@@ -311,7 +321,7 @@ def _save_excel(year: int, filtered: list, daily_prices_by_code: dict, storage: 
 
     # ── 데이터 행 ────────────────────────────────────────────────────────────
     green_fill = PatternFill(start_color="CCFFCC", end_color="CCFFCC", fill_type="solid")
-    red_fill   = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
+    red_fill = PatternFill(start_color="FFCCCC", end_color="FFCCCC", fill_type="solid")
     BASE_COL = len(base_headers)  # D+0 이 시작되는 컬럼 오프셋
 
     for row_data in rows_data:
@@ -363,6 +373,7 @@ def _save_excel(year: int, filtered: list, daily_prices_by_code: dict, storage: 
 # 진입점
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="투자경고종목 연도별 수집",
@@ -373,7 +384,7 @@ def parse_args():
   uv run python collect_yearly_warnings.py --year 2025  # 2025년만
   uv run python collect_yearly_warnings.py --start 2023 --end 2025
   uv run python collect_yearly_warnings.py --include-active  # 진행 중 종목 포함
-"""
+""",
     )
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--year", type=int, help="특정 연도만 수집 (예: 2023)")
@@ -398,24 +409,24 @@ def main():
     if skipped:
         print(f"[경고] 수집 불가 연도 제외: {sorted(skipped)}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  투자경고종목 연도별 수집")
     print(f"  대상 연도: {valid_years}")
     print(f"  진행 중 종목 포함: {'예' if include_active else '아니오'}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     results = {}
     for year in valid_years:
         ok = collect_year(year, include_active=include_active)
         results[year] = "[완료]" if ok else "[실패/데이터없음]"
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("  최종 결과 요약")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     for year, status in results.items():
         print(f"  {year}년: {status}")
     print(f"\n  출력 디렉토리: {os.path.abspath(OUTPUT_DIR)}/")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":
