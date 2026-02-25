@@ -318,10 +318,23 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
         for dp in price_list:
             collected_dates.add(dp.date.strftime("%Y-%m-%d"))
 
-    # ── Step 3: 처리 대상 날짜 계산 ─────────────────────────────────────────
-    target_dates = [(end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+    # ── Step 3: 처리 대상 날짜 계산 (실제 영업일 기준) ───────────────────────────
+    adapter = PyKRXAdapter()
+    # 넉넉하게 기간을 조회한 뒤 마지막 N 영업일을 추출 (추석/설날 대비)
+    trading_days = adapter.get_trading_days(
+        start_date=end_dt - timedelta(days=days * 4 + 10),
+        end_date=end_dt,
+    )
+    target_dates = [d.strftime("%Y-%m-%d") for d in trading_days[-days:]]
+
+    # 만약 거래일을 못 가져왔을 경우 대비 (기존 달력 기준 방식 fallback)
+    if not target_dates:
+        logger.warning("  영업일 목록 조회 실패. 달력 기준 날짜로 대체합니다.")
+        target_dates = [(end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
+
     missing_dates = [d for d in target_dates if d not in collected_dates]
-    logger.info(f"[3/6] 누락 날짜: {missing_dates} ({len(missing_dates)}/{days}일)")
+    logger.info(f"[3/6] 대상 날짜(영업일): {target_dates}")
+    logger.info(f"[3/6] 누락 날짜: {missing_dates} ({len(missing_dates)}/{len(target_dates)}일)")
 
     if not missing_dates and not any(s.code not in existing_codes for s in filtered):
         logger.info("  모든 데이터가 이미 최신 상태입니다. skip.")
@@ -333,7 +346,6 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
 
     if missing_dates and known_stocks:
         logger.info(f"[4/6] 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 수집...")
-        adapter = PyKRXAdapter()
 
         for date_str in missing_dates:
             date_dt = datetime.strptime(date_str, "%Y-%m-%d")
