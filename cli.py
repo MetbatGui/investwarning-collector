@@ -86,51 +86,28 @@ def cmd_today(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def cmd_year(args: argparse.Namespace) -> int:
-    """단일 연도 혹여 연속된 연도 범위 전체의 데이터를 한 번에(백필) 수집합니다.
-
-    Args:
-        args (argparse.Namespace): `--year` 단일 연도 혹은 `--start`, `--end` 범위 지정 인자.
-
-    Returns:
-        int: 최소 하나 이상 수집 대상이 올바를 때 0을 리턴. 인자 에러 시 1 반환.
-    """
-    storage, repository = _setup_di(args)
-
-    # 임시 하드코딩
+def _get_target_years(args: argparse.Namespace) -> list[int]:
     YEAR_RANGES = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
+    years = [args.year] if args.year else list(range(args.start, args.end + 1))
+    valid = [y for y in years if y in YEAR_RANGES]
+    skipped = set(years) - set(valid)
+    if skipped: print(f"[경고] 수집 불가 연도 제외: {sorted(skipped)}")
+    return valid
 
-    if args.year:
-        years = [args.year]
-    else:
-        years = list(range(args.start, args.end + 1))
-
-    valid_years = [y for y in years if y in YEAR_RANGES]
-    skipped = set(years) - set(valid_years)
-    if skipped:
-        print(f"[경고] 수집 불가 연도 제외: {sorted(skipped)}")
-    if not valid_years:
-        print("[오류] 수집할 연도가 없습니다.")
-        return 1
-
-    print(f"\n{'=' * 60}")
-    print(f"  연도별 데이터 수집: {valid_years}")
-    print(f"{'=' * 60}")
+def cmd_year(args: argparse.Namespace) -> int:
+    """연도 범위 전체 데이터를 백필 수집합니다."""
+    storage, repository = _setup_di(args)
+    valid_years = _get_target_years(args)
+    if not valid_years: return 1
 
     from investment_hub.application.services import WarningCollectionService
-
     service = WarningCollectionService(repository=repository, storage=storage)
-    results = {}
-    for year in valid_years:
-        ok = service.collect_year(year, include_active=args.include_active)
-        results[year] = "[완료]" if ok else "[실패/데이터없음]"
-
-    print(f"\n{'=' * 60}")
-    print("  최종 결과 요약")
-    print(f"{'=' * 60}")
-    for year, status in results.items():
-        print(f"  {year}년: {status}")
-
+    
+    print(f"\n{'='*60}\n  연도별 수집: {valid_years}\n{'='*60}")
+    results = {y: ("[완료]" if service.collect_year(y, include_active=args.include_active) else "[실패]") for y in valid_years}
+    
+    print(f"\n{'='*60}\n  최종 결과 요약\n{'='*60}")
+    for y, s in results.items(): print(f"  {y}년: {s}")
     return 0
 
 
@@ -153,53 +130,31 @@ def cmd_export_excel(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _run_ps_script(script_path: Path, args: list[str]) -> int:
+    res = subprocess.run(["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script_path)] + args, capture_output=False)
+    return res.returncode
+
+def _show_scheduler_status(task_name: str) -> int:
+    cmd = f"$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; " \
+          f"if ($t) {{ Write-Host '[등록됨]' $t.TaskName $t.State }} " \
+          f"else {{ Write-Host '[미등록] {task_name} 스케줄이 없습니다.' }}"
+    return subprocess.run(["powershell", "-Command", cmd], capture_output=False).returncode
+
 def cmd_scheduler(args: argparse.Namespace) -> int:
-    """Windows 작업 스케줄러를 등록하거나 제거/상태확인을 보조합니다.
-
-    Args:
-        args (argparse.Namespace): `install`, `uninstall`, `status` 여부를 담은 action 인자.
-
-    Returns:
-        int: powershell 스크립트의 서브프로세스 종료 반환코드.
-    """
-    task_name = "InvestWarningCollector"
-    ps1 = Path(__file__).parent / "setup_scheduler.ps1"
-
+    """Windows 작업 스케줄러 관리 핸들러입니다."""
+    task_name, ps1 = "InvestWarningCollector", Path(__file__).parent / "setup_scheduler.ps1"
     if not ps1.exists():
-        print(f"[오류] setup_scheduler.ps1 파일을 찾을 수 없습니다: {ps1}")
+        print(f"[오류] setup_scheduler.ps1 미존재: {ps1}")
         return 1
 
-    action = args.action
-
-    if action == "install":
-        print(f"[스케줄러] '{task_name}' 등록 중 (매일 15:50)...")
-        result = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps1)],
-            capture_output=False,
-        )
-        return result.returncode
-
-    elif action == "uninstall":
+    if args.action == "install":
+        print(f"[스케줄러] '{task_name}' 등록 중...")
+        return _run_ps_script(ps1, [])
+    if args.action == "uninstall":
         print(f"[스케줄러] '{task_name}' 등록 해제 중...")
-        result = subprocess.run(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(ps1), "-Uninstall"],
-            capture_output=False,
-        )
-        return result.returncode
-
-    elif action == "status":
-        result = subprocess.run(
-            [
-                "powershell",
-                "-Command",
-                f"$t = Get-ScheduledTask -TaskName '{task_name}' -ErrorAction SilentlyContinue; "
-                f"if ($t) {{ Write-Host '[등록됨]' $t.TaskName $t.State }} "
-                f"else {{ Write-Host '[미등록] {task_name} 스케줄이 없습니다.' }}",
-            ],
-            capture_output=False,
-        )
-        return result.returncode
-
+        return _run_ps_script(ps1, ["-Uninstall"])
+    if args.action == "status":
+        return _show_scheduler_status(task_name)
     return 0
 
 
@@ -208,129 +163,50 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _build_storage_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--storage", choices=["local", "drive"], default="local", help="저장 방식 선택")
+    p.add_argument("--token-file", dest="token_file", default="secrets/token.json", help="Google Drive 토큰 경로")
+    p.add_argument("--client-secret", dest="client_secret", default="secrets/client_secret.json", help="OAuth 비밀파일 경로")
+    p.add_argument("--drive-folder", dest="drive_folder", default="KRX_Auto_Crawling_Data", help="Drive 루트 폴더")
+    return p
+
+def _add_today_cmd(subparsers, common):
+    p = subparsers.add_parser("today", parents=[common], help="최근 N일 수집", description="오늘 기준 최근 N일 수집")
+    p.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"), help="마지막 날짜 (YYYY-MM-DD)")
+    p.add_argument("--days", type=int, default=1, help="수집 일수")
+    p.add_argument("--include-active", dest="include_active", action="store_true", help="진행중 포함")
+    p.set_defaults(func=cmd_today)
+
+def _add_year_cmd(subparsers, common):
+    p = subparsers.add_parser("year", parents=[common], help="연도 범위 수집", description="연도별 백필 수집")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--year", type=int, help="특정 연도")
+    g.add_argument("--start", type=int, default=2020, help="시작 연도")
+    p.add_argument("--end", type=int, default=datetime.now().year, help="종료 연도")
+    p.add_argument("--include-active", dest="include_active", action="store_true", help="진행중 포함")
+    p.set_defaults(func=cmd_year)
+
+def _add_export_cmd(subparsers, common):
+    p = subparsers.add_parser("export-excel", parents=[common], help="Excel 리포트 재생성")
+    p.add_argument("--year", type=int, required=True, help="타겟 연도")
+    p.set_defaults(func=cmd_export_excel)
+
+def _add_scheduler_cmd(subparsers):
+    p = subparsers.add_parser("scheduler", help="Windows 작업 스케줄러 관리")
+    p.add_argument("action", choices=["install", "uninstall", "status"], help="install/uninstall/status")
+    p.set_defaults(func=cmd_scheduler)
+
 def build_parser() -> argparse.ArgumentParser:
-    """애플리케이션 전반의 CLI 인수(Argument) 구조 파서를 조립하고 반환합니다.
-
-    Returns:
-        argparse.ArgumentParser: 명령어 라우팅용 서브명령어가 정의된 파서 인스턴스.
-    """
-    parser = argparse.ArgumentParser(
-        prog="cli",
-        description="투자경고종목 수집기",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-커맨드:
-  today      오늘(또는 지정 날짜) 시세를 증분 수집합니다.
-  year       연도 범위 전체를 수집합니다.
-  scheduler  Windows 작업 스케줄러를 관리합니다.
-
-예시:
-  uv run python cli.py today
-  uv run python cli.py today --storage drive
-  uv run python cli.py year --year 2025
-  uv run python cli.py scheduler install
-""",
-    )
-
-    # 공통 저장소 인자 부모 파서
-    storage_parser = argparse.ArgumentParser(add_help=False)
-    storage_parser.add_argument(
-        "--storage",
-        choices=["local", "drive"],
-        default="local",
-        help="저장 방식 선택 (local: 로컬 파일, drive: 구글 드라이브)",
-    )
-    storage_parser.add_argument(
-        "--token-file", dest="token_file", default="secrets/token.json", help="Google Drive 전용: 인증 토큰 파일 경로"
-    )
-    storage_parser.add_argument(
-        "--client-secret",
-        dest="client_secret",
-        default="secrets/client_secret.json",
-        help="Google Drive 전용: 클라이언트 비밀 파일 경로",
-    )
-    storage_parser.add_argument(
-        "--drive-folder",
-        dest="drive_folder",
-        default="KRX_Auto_Crawling_Data",
-        help="Google Drive 전용: 루트 폴더 이름",
-    )
-
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
-    subparsers.required = True
-
-    # ── today ─────────────────────────────────────────────────────────────────
-    p_today = subparsers.add_parser(
-        "today",
-        parents=[storage_parser],
-        help="최근 N일 수집",
-        description="오늘 기준으로 최근 N일간 투자경고종목 시세를 수집·갱신합니다.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    p_today.add_argument(
-        "--date",
-        default=datetime.now().strftime("%Y-%m-%d"),
-        metavar="YYYY-MM-DD",
-        help="수집 마지막 날짜 (기본: 오늘)",
-    )
-    p_today.add_argument(
-        "--days",
-        type=int,
-        default=1,
-        metavar="N",
-        help="수집할 최근 일수 (기본: 1)",
-    )
-    p_today.add_argument(
-        "--include-active",
-        dest="include_active",
-        action="store_true",
-        help="해제일 없는 진행 중 종목도 포함",
-    )
-    p_today.set_defaults(func=cmd_today)
-
-    # ── year ──────────────────────────────────────────────────────────────────
-    p_year = subparsers.add_parser(
-        "year",
-        parents=[storage_parser],
-        help="연도 범위 수집",
-        description="연도 범위 전체 투자경고종목을 수집합니다.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    group = p_year.add_mutually_exclusive_group()
-    group.add_argument("--year", type=int, metavar="YYYY", help="특정 연도만 수집")
-    group.add_argument("--start", type=int, default=2020, metavar="YYYY", help="시작 연도 (기본: 2020)")
-    p_year.add_argument("--end", type=int, default=datetime.now().year, metavar="YYYY", help="종료 연도 (기본: 올해)")
-    p_year.add_argument(
-        "--include-active",
-        dest="include_active",
-        action="store_true",
-        help="해제일 없는 진행 중 종목도 포함",
-    )
-    p_year.set_defaults(func=cmd_year)
-
-    # ── export-excel ──────────────────────────────────────────────────────────
-    p_export = subparsers.add_parser(
-        "export-excel",
-        parents=[storage_parser],
-        help="Excel 리포트 재생성",
-        description="Parquet 데이터에서 Excel 리포트를 다시 생성합니다.",
-    )
-    p_export.add_argument("--year", type=int, required=True, help="재생성할 연도")
-    p_export.set_defaults(func=cmd_export_excel)
-
-    # ── scheduler ─────────────────────────────────────────────────────────────
-    p_sched = subparsers.add_parser(
-        "scheduler",
-        help="Windows 작업 스케줄러 관리",
-        description="매일 15:50 자동 실행 스케줄을 관리합니다.",
-    )
-    p_sched.add_argument(
-        "action",
-        choices=["install", "uninstall", "status"],
-        help="install: 등록 / uninstall: 해제 / status: 확인",
-    )
-    p_sched.set_defaults(func=cmd_scheduler)
-
+    """CLI 구조 파서를 조립하고 반환합니다."""
+    parser = argparse.ArgumentParser(prog="cli", description="투자경고종목 수집기")
+    common = _build_storage_parser()
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+    
+    _add_today_cmd(subparsers, common)
+    _add_year_cmd(subparsers, common)
+    _add_export_cmd(subparsers, common)
+    _add_scheduler_cmd(subparsers)
     return parser
 
 

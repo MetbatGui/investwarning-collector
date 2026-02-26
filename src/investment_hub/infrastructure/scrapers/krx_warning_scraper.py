@@ -23,150 +23,126 @@ def fetch_investment_warning_stocks(
     Returns:
         list[InvestmentWarningStock]: 수집 정보가 매핑된 도메인 객체 리스트. 수집 실패 시 빈 리스트 반환.
     """
-    url = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
+def _get_default_dates(start_date: str | None, end_date: str | None) -> tuple[str, str]:
+    end = end_date or datetime.now().strftime("%Y-%m-%d")
+    start = start_date or (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    return start, end
 
-    if end_date is None:
-        end_date = datetime.now().strftime("%Y-%m-%d")
-    if start_date is None:
-        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
-
-    # Payload based on user request and experimentation
-    data = {
-        "method": "investattentwarnriskySub",
-        "currentPageSize": "5000",
-        "pageIndex": "1",
-        "orderMode": "3",
-        "orderStat": "D",
-        "searchCodeType": "",
-        "searchCorpName": "",
-        "repIsuSrtCd": "",
-        "menuIndex": "2",
-        "forward": "invstwarnisu_sub",
-        "searchFromDate": end_date,
-        "marketType": "",
-        "searchCorpNameTmp": "",
-        "etsIsuSrtCd": "",
-        "startDate": start_date,
-        "endDate": end_date,
+def _build_payload(start: str, end: str) -> dict:
+    return {
+        "method": "investattentwarnriskySub", "currentPageSize": "5000", "pageIndex": "1",
+        "orderMode": "3", "orderStat": "D", "searchCodeType": "", "searchCorpName": "",
+        "repIsuSrtCd": "", "menuIndex": "2", "forward": "invstwarnisu_sub",
+        "searchFromDate": end, "marketType": "", "searchCorpNameTmp": "",
+        "etsIsuSrtCd": "", "startDate": start, "endDate": end,
     }
 
+def _get_name_to_code_mapping(end_date: str) -> dict:
+    adapter = PyKRXAdapter()
+    mapping_date = min(datetime.strptime(end_date, "%Y-%m-%d"), datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    print(f"Building stock name-to-code mapping (기준일: {mapping_date.strftime('%Y-%m-%d')})...")
+    mapping = adapter.get_ticker_name_mapping(mapping_date, market="ALL", use_cache=True)
+    print(f"Mapping ready: {len(mapping)} stocks")
+    return mapping
+
+def _fetch_html(url: str, payload: dict) -> str | None:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/91.0.4472.124 Safari/537.36",
         "Referer": "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do?method=investattentwarnriskyMain",
     }
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    resp = requests.post(url, data=payload, headers=headers, verify=False, timeout=30)  # nosec B501
+    if resp.status_code != 200:
+        print(f"Error: Status code {resp.status_code}")
+        return None
+    try: return resp.content.decode("euc-kr")
+    except UnicodeDecodeError:
+        try: return resp.content.decode("cp949")
+        except UnicodeDecodeError: return resp.text
 
+def _parse_table(html: str) -> list | None:
+    soup = BeautifulSoup(html, "html.parser")
+    tables = soup.select("table")
+    if not tables:
+        print("No tables found.")
+        return None
+    target = next((t for t in tables if "list" in (t.get("class") or []) and "type-00" in (t.get("class") or [])), tables[0])
+    rows = target.select("tr")
+    if len(rows) <= 1:
+        print("No data rows found.")
+        return None
+    return rows
+
+def _extract_market(name_cell) -> str:
+    img = name_cell.find("img")
+    if not img: return "Unknown"
+    if img.has_attr("alt"): return str(img["alt"])
+    if img.has_attr("title"): return str(img["title"])
+    return "Unknown"
+
+def _parse_date(date_str: str) -> datetime | None:
+    if not date_str or date_str == "-": return None
+    try: return datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError: return None
+
+def _process_rows(rows: list, mapping: dict) -> list[InvestmentWarningStock]:
+    """BS4로 파싱된 전체 행 집합을 순회하며 유효한 도메인 객체 리스트로 변환합니다.
+
+    Args:
+        rows (list): BeautifulSoup 행 목록.
+        mapping (dict): 종목명-종합코드 매핑 맵.
+
+    Returns:
+        list[InvestmentWarningStock]: 생성 완료된 도메인 모델 콜렉션.
+    """
     results = []
+    for row in rows:
+        stock = _parse_stock_from_row(row, mapping)
+        if stock: results.append(stock)
+    return results
 
-    # PyKRX 어댑터 초기화
-    pykrx_adapter = PyKRXAdapter()
+def _parse_stock_from_row(row, mapping: dict) -> InvestmentWarningStock | None:
+    """단일 HTML 행을 분석하여 지정일, 해제일 등의 속성을 추출하고 객체화합니다.
 
-    # end_date 기준으로 종목명→코드 매핑 테이블 생성
-    # (현재 날짜가 아닌 end_date 기준으로 조회해야 과거 사명의 종목도 찾을 수 있음)
-    # 단, 미래 날짜는 오늘로 제한
-    mapping_date = datetime.strptime(end_date, "%Y-%m-%d")
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    if mapping_date > today:
-        mapping_date = today
+    Args:
+        row: BeautifulSoup 단일 tr 요소.
+        mapping (dict): 코드 조회용 사전.
 
-    print(f"Building stock name-to-code mapping (기준일: {mapping_date.strftime('%Y-%m-%d')})...")
-    name_to_code_mapping = pykrx_adapter.get_ticker_name_mapping(mapping_date, market="ALL", use_cache=True)
-    print(f"Mapping ready: {len(name_to_code_mapping)} stocks")
+    Returns:
+        InvestmentWarningStock | None: 추출 성공 시 객체, 데이터 부족 시 None.
+    """
+    cols = row.select("td")
+    if len(cols) < 5: return None
+    
+    name = cols[1].text.strip()
+    desig_dt = _parse_date(cols[3].text.strip())
+    if not desig_dt: return None
+    
+    code = mapping.get(name)
+    if not code:
+        print(f"  Warning: Could not find code for '{name}'")
+        return None
+        
+    return InvestmentWarningStock(
+        code=code, name=name, market=_extract_market(cols[1]), 
+        designation_date=desig_dt, release_date=_parse_date(cols[4].text.strip())
+    )
 
+def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:
+    """KRX KIND 기업공시 채널에서 특정 기간 동안의 '투자경고종목' 지정 내역을 크롤링합니다."""
+    url = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
+    start, end = _get_default_dates(start_date, end_date)
+    mapping = _get_name_to_code_mapping(end)
+    
     try:
-        import urllib3
-
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        response = requests.post(url, data=data, headers=headers, verify=False, timeout=30)  # nosec B501
-
-        if response.status_code != 200:
-            print(f"Error: Status code {response.status_code}")
-            return []
-
-        # Encoding handling
-        content = response.content
-        try:
-            html = content.decode("euc-kr")
-        except UnicodeDecodeError:
-            try:
-                html = content.decode("cp949")
-            except UnicodeDecodeError:
-                html = response.text
-
-        soup = BeautifulSoup(html, "html.parser")
-        tables = soup.select("table")
-
-        if not tables:
-            print("No tables found.")
-            return []
-
-        table = None
-        for t in tables:
-            if "list" in (t.get("class") or []) and "type-00" in (t.get("class") or []):
-                table = t
-                break
-
-        if not table:
-            table = tables[0]
-
-        rows = table.select("tr")
-        if len(rows) <= 1:
-            print("No data rows found.")
-            return []
-
-        for row in rows:
-            cols = row.select("td")
-            if len(cols) < 5:
-                continue
-
-            # Cols: 0=No, 1=Name(MarketImg), 2=AnnouncementDate, 3=DesignationDate, 4=ReleaseDate
-
-            name_cell = cols[1]
-            company_name = name_cell.text.strip()
-
-            # Extract Market from Image Alt
-            # <img src="..." alt="코스닥" ...>
-            market_img = name_cell.find("img")
-            market = "Unknown"
-            if market_img and market_img.has_attr("alt"):
-                market = str(market_img["alt"])
-            elif market_img and market_img.has_attr("title"):
-                market = str(market_img["title"])  # Sometimes title is used?
-
-            # 공시일은 cols[2] (미사용), 지정일은 cols[3], 해제일은 cols[4]
-            designation_str = cols[3].text.strip()  # 지정일
-            release_str = cols[4].text.strip()  # 해제일
-
-            def parse_date(date_str):
-                if not date_str or date_str == "-":
-                    return None
-                try:
-                    return datetime.strptime(date_str, "%Y-%m-%d")
-                except ValueError:
-                    return None
-
-            designation_date = parse_date(designation_str)
-            release_date = parse_date(release_str)
-
-            # Must have designation date to be valid
-            if designation_date:
-                # 미리 생성한 매핑 테이블에서 종목코드 조회
-                code = name_to_code_mapping.get(company_name)
-
-                if code:
-                    stock_obj = InvestmentWarningStock(
-                        code=code,
-                        name=company_name,
-                        market=market,
-                        designation_date=designation_date,
-                        release_date=release_date,
-                    )
-                    results.append(stock_obj)
-                else:
-                    print(f"  Warning: Could not find code for '{company_name}'")
-
-        return results
-
+        html = _fetch_html(url, _build_payload(start, end))
+        if not html: return []
+        
+        rows = _parse_table(html)
+        if not rows: return []
+        
+        return _process_rows(rows, mapping)
     except Exception as e:
         print(f"Exception during scraping: {e}")
         return []

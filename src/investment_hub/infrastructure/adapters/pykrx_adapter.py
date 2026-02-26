@@ -32,210 +32,146 @@ class PyKRXAdapter:
         self.market_daily_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_ticker_list(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> list[str]:
-        """지정된 날짜에 상장된 종목들의 티커(종목코드) 목록을 가져옵니다.
+        """지정된 날짜에 상장된 종목들의 티커 목록을 가져옵니다."""
+        d_str = date.strftime("%Y%m%d")
+        cache_path = self.ticker_cache_dir / f"{d_str}_{market}.json"
+        
+        if use_cache:
+            cache = self._load_cache(cache_path, f"TICKER for {d_str}")
+            if cache is not None: return cache
+
+        tickers = self._fetch_tickers(d_str, market)
+        if use_cache and tickers: self._save_cache(cache_path, tickers, "TICKER")
+        return tickers
+
+    def _fetch_tickers(self, date_str: str, market: str) -> list[str]:
+        """지정된 날짜와 시장에 대해 KRX로부터 티커 목록을 실제 조회합니다.
 
         Args:
-            date (datetime): 상장 종목을 조회할 기준 날짜.
-            market (str): 조회 대상 시장 구분. 기본값 "ALL". ("KOSPI", "KOSDAQ", "KONEX", "ALL" 중 택 1)
-            use_cache (bool): 로컬 디스크 캐시 사용 여부.
+            date_str (str): 'YYYYMMDD' 형식의 날짜 문자열.
+            market (str): 시장 구분 (KOSPI, KOSDAQ, KONEX, ALL).
 
         Returns:
-            list[str]: 수집된 6자리 종목코드 문자열 원소들의 목록. 에러 발생 시 빈 리스트 반환.
+            list[str]: 티커 목록 리스트.
         """
-        date_str = date.strftime("%Y%m%d")
-        cache_file = self.ticker_cache_dir / f"{date_str}_{market}.json"
-
-        # 캐시 확인
-        if use_cache and cache_file.exists():
-            try:
-                with open(cache_file, encoding="utf-8") as f:
-                    tickers = json.load(f)
-                print(f"  [TICKER CACHE HIT] {len(tickers)} tickers for {date_str}")
-                return tickers
-            except Exception as e:
-                print(f"  [TICKER CACHE ERROR] {e}")
-
-        # API 호출
-        print(f"  [TICKER API] Fetching ticker list for {date_str}...")
-
+        print(f"  [TICKER API] Fetching for {date_str}...")
         try:
-            if market == "ALL":
-                tickers = []
-                for mkt in ["KOSPI", "KOSDAQ", "KONEX"]:
-                    try:
-                        mkt_tickers = stock.get_market_ticker_list(date_str, market=mkt)
-                        tickers.extend(mkt_tickers)
-                        print(f"    - {mkt}: {len(mkt_tickers)} tickers")
-                    except Exception as e:
-                        print(f"    - {mkt}: Error - {e}")
-            else:
-                tickers = stock.get_market_ticker_list(date_str, market=market)
-
-            print(f"  [TICKER SUCCESS] Total {len(tickers)} tickers")
-
-            # 캐시 저장
-            if use_cache and tickers:
+            if market != "ALL": return stock.get_market_ticker_list(date_str, market=market)
+            all_tkrs = []
+            for m in ["KOSPI", "KOSDAQ", "KONEX"]:
                 try:
-                    with open(cache_file, "w", encoding="utf-8") as f:
-                        json.dump(tickers, f, ensure_ascii=False, indent=2)
-                    print(f"  [TICKER CACHED] {len(tickers)} tickers saved")
-                except Exception as e:
-                    print(f"  [TICKER CACHE SAVE ERROR] {e}")
+                    m_tkrs = stock.get_market_ticker_list(date_str, market=m)
+                    all_tkrs.extend(m_tkrs)
+                    print(f"    - {m}: {len(m_tkrs)} tickers")
+                except Exception as e: print(f"    - {m}: Error - {e}")
+            return all_tkrs
+        except Exception as e: print(f"  [TICKER API ERROR] {e}"); return []
 
-            return tickers
+    def _load_cache(self, path: Path, label: str):
+        """지정된 경로에서 JSON 캐시 파일을 읽어옵니다.
 
-        except Exception as e:
-            print(f"  [TICKER API ERROR] {e}")
-            return []
+        Args:
+            path (Path): 캐시 파일 경로.
+            label (str): 로그 출력용 라벨.
+
+        Returns:
+            Any | None: 로드된 데이터 (list/dict), 파일이 없거나 오류 발생 시 None.
+        """
+        if not path.exists(): return None
+        try:
+            with open(path, encoding="utf-8") as f: data = json.load(f)
+            print(f"  [CACHE HIT] {label}: {len(data)}")
+            return data
+        except Exception as e: print(f"  [CACHE ERROR] {label}: {e}"); return None
+
+    def _save_cache(self, path: Path, data, label: str):
+        """데이터를 JSON 형식으로 지정된 경로에 캐싱합니다.
+
+        Args:
+            path (Path): 캐시 파일 저장 경로.
+            data (Any): 저장할 데이터.
+            label (str): 로그 출력용 라벨.
+        """
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"  [CACHED] {label} saved to {path.name}")
+        except Exception as e: print(f"  [CACHE SAVE ERROR] {label}: {e}")
 
     def get_ticker_name_mapping(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> dict[str, str]:
-        """특정 영업일에 유효한 종목명 → 종목코드(티커) 매핑 딕셔너리를 생성하거나 가져옵니다.
+        """특정 영업일에 유효한 종목명 → 종목코드 매핑을 가져옵니다."""
+        d_str = date.strftime("%Y%m%d")
+        cache_path = self.mapping_cache_dir / f"{d_str}_{market}.json"
+        
+        if use_cache:
+            cache = self._load_cache(cache_path, f"MAPPING for {d_str}")
+            if cache is not None: return cache
 
-        Args:
-            date (datetime): 조회 기준 날짜.
-            market (str): 시장 구분. 기본값 "ALL". ("KOSPI", "KOSDAQ", "KONEX", "ALL")
-            use_cache (bool): 맵핑 결과 캐시 사용 여부.
-
-        Returns:
-            dict[str, str]: "삼성전자" -> "005930" 형태의 데이터를 가지는 딕셔너리.
-        """
-        date_str = date.strftime("%Y%m%d")
-        cache_file = self.mapping_cache_dir / f"{date_str}_{market}.json"
-
-        # 캐시 확인
-        if use_cache and cache_file.exists():
-            try:
-                with open(cache_file, encoding="utf-8") as f:
-                    mapping = json.load(f)
-                print(f"  [MAPPING CACHE HIT] {len(mapping)} name-to-code mappings for {date_str}")
-                return mapping
-            except Exception as e:
-                print(f"  [MAPPING CACHE ERROR] {e}")
-
-        # 종목 리스트 가져오기
-        print(f"  [MAPPING API] Building name-to-code mapping for {date_str}...")
-        tickers = self.get_ticker_list(date, market, use_cache)
-
-        if not tickers:
-            print(f"  [MAPPING ERROR] No tickers found for {date_str}")
-            return {}
-
-        # 종목명→종목코드 매핑 생성
-        mapping = {}
-        for ticker in tickers:
-            try:
-                name = stock.get_market_ticker_name(ticker)
-                if name:
-                    mapping[name] = ticker
-            except Exception as e:
-                print(f"  [MAPPING ERROR] Failed to get name for {ticker}: {e}")
-
-        print(f"  [MAPPING SUCCESS] Created {len(mapping)} name-to-code mappings")
-
-        # 캐시 저장
-        if use_cache and mapping:
-            try:
-                with open(cache_file, "w", encoding="utf-8") as f:
-                    json.dump(mapping, f, ensure_ascii=False, indent=2)
-                print(f"  [MAPPING CACHED] {len(mapping)} mappings saved")
-            except Exception as e:
-                print(f"  [MAPPING CACHE SAVE ERROR] {e}")
-
+        mapping = self._build_mapping(date, market, use_cache)
+        if use_cache and mapping: self._save_cache(cache_path, mapping, "MAPPING")
         return mapping
 
-    def get_stock_ohlcv(
-        self,
-        ticker: str,
-        start_date: datetime,
-        end_date: datetime,
-        use_cache: bool = True,
-        ticker_name: str | None = None,
-    ) -> pd.DataFrame:
-        """단일 종목에 대한 특정 기간 동안의 OHLCV(시고저종, 거래량) 일별 데이터를 조회합니다.
+    def _build_mapping(self, date: datetime, market: str, use_cache: bool) -> dict[str, str]:
+        """티커 리스트를 순회하며 종목명 → 종목코드 매핑을 구축합니다.
 
         Args:
-            ticker (str): 조회할 종목코드.
-            start_date (datetime): 조회 시작일.
-            end_date (datetime): 조회 종료일.
-            use_cache (bool): 데이터 캐싱 기능 사용 여부.
-            ticker_name (str | None): 캐시 파일명 작성을 위해 사용될 종목명. (생략 시 API로 조회됨)
+            date (datetime): 기준 일시.
+            market (str): 시장 구분.
+            use_cache (bool): 하위 티커 리스트 호출 시 캐시 사용 여부.
 
         Returns:
-            pd.DataFrame: 생성된 날짜가 인덱스에 포함된 pandas DataFrame.
-                컬럼 구성: [시가, 고가, 저가, 종가, 거래량]
-                조회 실패나 기간 내 데이터가 없는 경우 빈 DataFrame 반환.
+            dict[str, str]: 종목명을 키로, 코드를 값으로 갖는 사전형.
         """
-        start_str = start_date.strftime("%Y%m%d")
-        end_str = end_date.strftime("%Y%m%d")
-
-        # 종목명이 제공되지 않으면 API로 조회
-        if ticker_name is None:
+        tickers = self.get_ticker_list(date, market, use_cache)
+        if not tickers: return {}
+        mapping = {}
+        for tkr in tickers:
             try:
-                ticker_name = stock.get_market_ticker_name(ticker)
-            except Exception as e:
-                print(f"  [NAME LOOKUP ERROR] {ticker}: {e}")
-                ticker_name = ticker  # 실패 시 종목코드 사용
+                name = stock.get_market_ticker_name(tkr)
+                if name: mapping[name] = tkr
+            except Exception as e: print(f"  [MAPPING ERROR] {tkr}: {e}")
+        return mapping
 
-        # 종목명 기반 캐시 파일
-        name_cache_file = self.ohlcv_cache_dir / f"{ticker_name}_{start_str}_{end_str}.json"
-
-        # 종목코드 기반 캐시 파일 (기존 호환성)
-        code_cache_file = self.ohlcv_cache_dir / f"{ticker}_{start_str}_{end_str}.json"
-
-        # 캐시 확인 (종목명 우선, 없으면 종목코드)
+    def get_stock_ohlcv(self, ticker: str, start_date: datetime, end_date: datetime, use_cache: bool = True, ticker_name: str | None = None) -> pd.DataFrame:
+        """단일 종목의 특정 기간 OHLCV 데이터를 조회합니다."""
+        s_str, e_str = start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
+        t_name = ticker_name or self._lookup_ticker_name(ticker)
+        cache_path = self.ohlcv_cache_dir / f"{t_name}_{s_str}_{e_str}.json"
+        
         if use_cache:
-            # 1. 종목명 기반 캐시 확인
-            if name_cache_file.exists():
-                try:
-                    with open(name_cache_file, encoding="utf-8") as f:
-                        cached_data = json.load(f)
+            cache = self._load_cache(cache_path, f"OHLCV for {t_name}")
+            if cache is not None: return self._to_ohlcv_df(cache)
 
-                    if cached_data:
-                        df = pd.DataFrame(cached_data)
-                        df["날짜"] = pd.to_datetime(df["날짜"])
-                        df.set_index("날짜", inplace=True)
-                        return df
-                except Exception as e:
-                    print(f"  [OHLCV CACHE ERROR] {ticker_name}: {e}")
+        df = self._fetch_stock_ohlcv(s_str, e_str, ticker)
+        if use_cache and not df.empty:
+            self._save_cache(cache_path, self._from_ohlcv_df(df), f"OHLCV for {t_name}")
+        return df
 
-            # 2. 종목코드 기반 캐시 확인 (기존 호환성)
-            elif code_cache_file.exists():
-                try:
-                    with open(code_cache_file, encoding="utf-8") as f:
-                        cached_data = json.load(f)
+    def _lookup_ticker_name(self, ticker: str) -> str:
+        """티커 코드로부터 종목명을 조회합니다. 실패 시 티커를 그대로 반환합니다."""
+        try: return stock.get_market_ticker_name(ticker) or ticker
+        except: return ticker
 
-                    if cached_data:
-                        df = pd.DataFrame(cached_data)
-                        df["날짜"] = pd.to_datetime(df["날짜"])
-                        df.set_index("날짜", inplace=True)
-                        print(f"  [LEGACY CACHE HIT] Using code-based cache for {ticker}")
-                        return df
-                except Exception as e:
-                    print(f"  [OHLCV CACHE ERROR] {ticker}: {e}")
+    def _to_ohlcv_df(self, data: list) -> pd.DataFrame:
+        """캐시(list) 데이터를 OHLCV 데이터프레임으로 복원하고 인덱스를 설정합니다."""
+        df = pd.DataFrame(data)
+        if "날짜" in df.columns:
+            df["날짜"] = pd.to_datetime(df["날짜"])
+            df.set_index("날짜", inplace=True)
+        return df
 
-        # API 호출
-        try:
-            df = stock.get_market_ohlcv(start_str, end_str, ticker)
+    def _from_ohlcv_df(self, df: pd.DataFrame) -> list:
+        """OHLCV 데이터프레임을 JSON 저장이 용이한 리스트 구조로 변환합니다."""
+        df_save = df.reset_index()
+        df_save.columns = ["날짜"] + list(df.columns)
+        df_save["날짜"] = df_save["날짜"].astype(str)
+        return df_save.to_dict("records")
 
-            # 캐시 저장 (종목명 기반으로만 저장)
-            if use_cache and not df.empty:
-                try:
-                    df_to_save = df.reset_index()
-                    df_to_save.columns = ["날짜"] + list(df.columns)
-                    df_to_save["날짜"] = df_to_save["날짜"].astype(str)
-                    cache_data = df_to_save.to_dict("records")
-
-                    with open(name_cache_file, "w", encoding="utf-8") as f:
-                        json.dump(cache_data, f, ensure_ascii=False, indent=2)
-                    print(f"  [OHLCV CACHED] {ticker_name} ({ticker})")
-                except Exception as e:
-                    print(f"  [OHLCV CACHE SAVE ERROR] {ticker_name}: {e}")
-
-            return df
-
-        except Exception as e:
-            print(f"  [OHLCV API ERROR] {ticker}: {e}")
-            return pd.DataFrame()
+    def _fetch_stock_ohlcv(self, start_str: str, end_str: str, ticker: str) -> pd.DataFrame:
+        """KRX로부터 단일 종목의 OHLCV 데이터를 실제 조회합니다."""
+        try: return stock.get_market_ohlcv(start_str, end_str, ticker)
+        except Exception as e: print(f"  [OHLCV API ERROR] {ticker}: {e}"); return pd.DataFrame()
 
     def get_trading_days(self, start_date: datetime, end_date: datetime) -> list[datetime]:
         """해당 기간 내 증권시장이 실제로 열린 영업일(개장일) 목록을 가져옵니다.
@@ -261,84 +197,45 @@ class PyKRXAdapter:
             return []
 
     def get_daily_market_ohlcv(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> pd.DataFrame:
-        """지정된 단일 날짜에 대해 해당 시장 내 상장된 모든 종목의 OHLCV 단면 데이터를 조회합니다.
+        """지정된 날짜의 시장 내 모든 종목 OHLCV 데이터를 조회합니다."""
+        d_str = date.strftime("%Y%m%d")
+        cache_path = self.market_daily_cache_dir / f"{d_str}_{market}.json"
+        
+        if use_cache:
+            cache = self._load_cache(cache_path, f"MARKET DAILY for {d_str}")
+            if cache is not None: return self._to_market_df(cache)
 
-        Args:
-            date (datetime): 시장 전체 주가를 조회할 영업일 시점.
-            market (str): 조회할 시장 구분 (예: KOSPI, KOSDAQ).
-            use_cache (bool): 디스크 데이터 캐시 사용 여부.
+        df = self._fetch_market_ohlcv(d_str, market)
+        if use_cache and not df.empty: self._save_cache(cache_path, self._from_market_df(df), f"MARKET DAILY")
+        return df
 
-        Returns:
-            pd.DataFrame:
-                인덱스: 종목코드 (티커/ticker)
-                컬럼: [시가, 고가, 저가, 종가, 거래량, 등락률 ...]
-                만약 해당 일자가 휴장일이거나 데이터가 유효하지 않으면 빈 DataFrame이 반환됩니다.
-        """
-        date_str = date.strftime("%Y%m%d")
-        cache_file = self.market_daily_cache_dir / f"{date_str}_{market}.json"
+    def _to_market_df(self, data: list) -> pd.DataFrame:
+        """캐시된 시장 전체 시세 리스트를 데이터프레임으로 복원하고 타입을 정제합니다."""
+        df = pd.DataFrame(data)
+        ticker_col = next((c for c in ["티커", "ticker"] if c in df.columns), None)
+        if ticker_col: df.set_index(ticker_col, inplace=True)
+        for col in ["시가", "고가", "저가", "종가", "거래량"]:
+            if col in df.columns: df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
 
-        # 캐시 확인
-        if use_cache and cache_file.exists():
-            try:
-                with open(cache_file, encoding="utf-8") as f:
-                    cached_data = json.load(f)
+    def _from_market_df(self, df: pd.DataFrame) -> list:
+        """시장 전체 시세 데이터프레임을 JSON용 리스트로 변환합니다."""
+        df_save = df.reset_index()
+        if not any(c in df_save.columns for c in ["티커", "ticker"]):
+            df_save.rename(columns={df_save.columns[0]: "티커"}, inplace=True)
+        return df_save.to_dict("records")
 
-                if cached_data:
-                    # JSON -> DataFrame (orient='records'로 저장했을 경우 재구성 필요하지만,
-                    # 여기서는 Ticker가 Index여야 하므로 orient='index'나 'split'이 적절할 수 있음.
-                    # 하지만 편의상 reset_index() 후 records로 저장하고 다시 불러와서 set_index() 하는 방식을 사용)
-                    df = pd.DataFrame(cached_data)
-                    if "티커" in df.columns:
-                        df.set_index("티커", inplace=True)
-                    elif "ticker" in df.columns:
-                        df.set_index("ticker", inplace=True)
-
-                    # 숫자형 변환 (JSON 로드 시 문자열로 될 수 있음)
-                    for col in ["시가", "고가", "저가", "종가", "거래량"]:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-                    return df
-            except Exception as e:
-                print(f"  [MARKET DAILY CACHE ERROR] {date_str}: {e}")
-
-        # API 호출
+    def _fetch_market_ohlcv(self, date_str: str, market: str) -> pd.DataFrame:
+        """KRX로부터 전종목 OHLCV 데이터를 실제 조회합니다."""
         try:
-            # get_market_ohlcv_by_ticker는 해당 일자의 전 종목 시세를 가져옴
-            # market="ALL"일 경우 KOSPI, KOSDAQ, KONEX 반복 호출 필요할 수 있음 (pykrx 버전에 따라 다름)
-            # 최신 pykrx는 market="ALL" 지원함.
-
             df = stock.get_market_ohlcv_by_ticker(date_str, market=market)
+            return df if self._is_market_ohlcv_valid(df) else pd.DataFrame()
+        except: return pd.DataFrame()
 
-            # 유효성 검사: 데이터의 50% 이상이 종가 0이면 휴장일 또는 무효 데이터로 간주
-            if not df.empty and "종가" in df.columns:
-                zero_count = (df["종가"] == 0).sum()
-                if zero_count > len(df) * 0.5:
-                    # print(f"  [MARKET DAILY INVALID] {date_str}: Too many zero closes ({zero_count}/{len(df)})")
-                    return pd.DataFrame()
-
-            # 캐시 저장
-            if use_cache and not df.empty:
-                try:
-                    df_to_save = df.reset_index()
-                    # 인덱스 이름이 없을 수 있으므로 지정
-                    if "티커" not in df_to_save.columns and "ticker" not in df_to_save.columns:
-                        df_to_save.rename(columns={df_to_save.columns[0]: "티커"}, inplace=True)
-
-                    cache_data = df_to_save.to_dict("records")
-
-                    with open(cache_file, "w", encoding="utf-8") as f:
-                        json.dump(cache_data, f, ensure_ascii=False, indent=2)
-                    # print(f"  [MARKET DAILY CACHED] {date_str} ({len(df)} stocks)")
-                except Exception as e:
-                    print(f"  [MARKET DAILY CACHE SAVE ERROR] {date_str}: {e}")
-
-            return df
-
-        except Exception:
-            # 휴장일이거나 데이터가 없는 경우 에러가 발생할 수 있음
-            # print(f"  [MARKET DAILY API ERROR] {date_str}: {e}")
-            return pd.DataFrame()
+    def _is_market_ohlcv_valid(self, df: pd.DataFrame) -> bool:
+        """조회된 전종목 시세 데이터의 유효성을 검증합니다 (0원 종가 과다 여부 확인)."""
+        if df.empty or "종가" not in df.columns: return False
+        return (df["종가"] == 0).sum() <= len(df) * 0.5
 
 
 if __name__ == "__main__":

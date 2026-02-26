@@ -195,121 +195,60 @@ class ParquetRepositoryAdapter(WarningStockRepository):
         """
         return self._base_dir / f"{year}.parquet"
 
-    def _to_dataframe(
-        self,
-        year: int,
-        stocks: list[InvestmentWarningStock],
-        prices: dict[str, list[DailyPriceData]],
-    ) -> pd.DataFrame:
-        """종목·시세 데이터를 Long-format DataFrame으로 변환합니다.
-
-        Args:
-            year: 수집 연도.
-            stocks: 투자경고 종목 목록.
-            prices: 종목코드 → 일별 시세 매핑.
-
-        Returns:
-            스키마를 준수하는 Long-format DataFrame.
-            시세가 없는 종목은 제외됩니다.
-        """
-        records = []
-        # 빠른 조회를 위해 (code, designation_date) → stock 매핑
-        stock_map = {(s.code, s.designation_date): s for s in stocks}
-
-        for stock in stocks:
-            code = stock.code
-            stock_prices = prices.get(code, [])
-            for dp in stock_prices:
-                records.append(
-                    {
-                        "year": year,
-                        "code": code,
-                        "name": stock.name,
-                        "market": stock.market,
-                        "designation_date": stock.designation_date,
-                        "release_date": stock.release_date,  # None 허용
-                        "date": dp.date,
-                        "close": dp.close,
-                        "change_rate": dp.change_rate,
-                    }
-                )
-
-        _ = stock_map  # 현재 미사용, 향후 확장용
-
-        if not records:
-            # 빈 DataFrame — 스키마 컬럼은 유지
-            return pd.DataFrame(columns=_SCHEMA_COLUMNS)
-
+    def _to_dataframe(self, year: int, stocks: list[InvestmentWarningStock], prices: dict[str, list[DailyPriceData]]) -> pd.DataFrame:
+        """종목·시세 데이터를 Long-format DataFrame으로 변환합니다."""
+        records = self._prepare_records(year, stocks, prices)
+        if not records: return pd.DataFrame(columns=_SCHEMA_COLUMNS)
+        
         df = pd.DataFrame(records)
-
-        # 타입 최적화
-        for col, dtype in _DTYPE_MAP.items():
-            if col in df.columns:
-                df[col] = df[col].astype(dtype)
-
-        # datetime 컬럼 타입 보장
-        df["designation_date"] = pd.to_datetime(df["designation_date"])
-        df["release_date"] = pd.to_datetime(df["release_date"])  # NaT 허용
-        df["date"] = pd.to_datetime(df["date"])
-
+        self._optimize_df_types(df)
         return df.sort_values(["designation_date", "code", "date"]).reset_index(drop=True)
 
-    def _from_dataframe(
-        self,
-        df: pd.DataFrame,
-    ) -> tuple[list[InvestmentWarningStock], dict[str, list[DailyPriceData]]]:
-        """Long-format DataFrame을 도메인 객체로 복원합니다.
+    def _prepare_records(self, year: int, stocks: list, prices: dict) -> list:
+        records = []
+        for stock in stocks:
+            for dp in prices.get(stock.code, []):
+                records.append({
+                    "year": year, "code": stock.code, "name": stock.name, "market": stock.market,
+                    "designation_date": stock.designation_date, "release_date": stock.release_date,
+                    "date": dp.date, "close": dp.close, "change_rate": dp.change_rate,
+                })
+        return records
 
-        Args:
-            df: load_year 에서 읽은 Long-format DataFrame.
+    def _optimize_df_types(self, df: pd.DataFrame):
+        for col, dtype in _DTYPE_MAP.items():
+            if col in df.columns: df[col] = df[col].astype(dtype)
+        for col in ["designation_date", "release_date", "date"]:
+            df[col] = pd.to_datetime(df[col])
 
-        Returns:
-            (stocks, prices) 튜플. stocks는 지정일 오름차순 정렬.
-        """
-        if df.empty:
-            return [], {}
-
-        # ── 종목 메타 복원 ──────────────────────────────────────────────
-        meta_cols = ["code", "name", "market", "designation_date", "release_date"]
-        meta = (
-            df[meta_cols]
-            .drop_duplicates(subset=["code", "designation_date"])
-            .sort_values("designation_date")
-            .reset_index(drop=True)
-        )
-
-        stocks: list[InvestmentWarningStock] = []
-        for _, row in meta.iterrows():
-            release_raw = row["release_date"]
-            release_dt: datetime | None = None if pd.isna(release_raw) else pd.Timestamp(release_raw).to_pydatetime()
-            stocks.append(
-                InvestmentWarningStock(
-                    code=str(row["code"]),
-                    name=str(row["name"]),
-                    market=str(row["market"]),
-                    designation_date=pd.Timestamp(row["designation_date"]).to_pydatetime(),
-                    release_date=release_dt,
-                )
-            )
-
-        # ── 시세 복원 ──────────────────────────────────────────────────
-        prices: dict[str, list[DailyPriceData]] = {}
-        for code, group in df.groupby("code"):
-            code_str = str(code)
-            price_list = []
-            for _, row in group.sort_values("date").iterrows():
-                price_list.append(
-                    DailyPriceData(
-                        code=code_str,
-                        name=str(row["name"]),
-                        date=pd.Timestamp(row["date"]).to_pydatetime(),
-                        close=float(row["close"]),
-                        change_rate=float(row["change_rate"]),
-                    )
-                )
-            prices[code_str] = price_list
-
+    def _from_dataframe(self, df: pd.DataFrame) -> tuple[list[InvestmentWarningStock], dict[str, list[DailyPriceData]]]:
+        """Long-format DataFrame을 도메인 객체로 복원합니다."""
+        if df.empty: return [], {}
+        stocks = self._restore_stocks(df)
+        prices = self._restore_prices(df)
         return stocks, prices
+
+    def _restore_stocks(self, df: pd.DataFrame) -> list[InvestmentWarningStock]:
+        meta_cols = ["code", "name", "market", "designation_date", "release_date"]
+        meta = df[meta_cols].drop_duplicates(["code", "designation_date"]).sort_values("designation_date")
+        stocks = []
+        for _, r in meta.iterrows():
+            rel = None if pd.isna(r["release_date"]) else pd.Timestamp(r["release_date"]).to_pydatetime()
+            stocks.append(InvestmentWarningStock(
+                code=str(r["code"]), name=str(r["name"]), market=str(r["market"]),
+                designation_date=pd.Timestamp(r["designation_date"]).to_pydatetime(), release_date=rel
+            ))
+        return stocks
+
+    def _restore_prices(self, df: pd.DataFrame) -> dict[str, list[DailyPriceData]]:
+        prices = {}
+        for code, group in df.groupby("code"):
+            c_str = str(code)
+            prices[c_str] = [DailyPriceData(
+                code=c_str, name=str(r["name"]), date=pd.Timestamp(r["date"]).to_pydatetime(),
+                close=float(r["close"]), change_rate=float(r["change_rate"])
+            ) for _, r in group.sort_values("date").iterrows()]
+        return prices
 
     def _write_parquet_atomic(self, year: int, df: pd.DataFrame) -> None:
         """DataFrame을 원자적으로 Parquet 파일에 저장합니다.

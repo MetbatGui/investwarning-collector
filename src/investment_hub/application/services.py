@@ -79,122 +79,110 @@ class WarningCollectionService:
         self.excel_exporter = WarningExcelExporter(trading_days_after_release=trading_days_after_release)
 
     def _csv_path(self, year: int) -> str:
+        """연도별 결과 CSV 파일의 전체 경로를 생성합니다.
+
+        Args:
+            year (int): 대상 연도.
+
+        Returns:
+            str: 생성된 파일 경로 문자열.
+        """
         return os.path.join(self.output_dir, f"투자경고종목분석({year}년).csv")
 
     def _save_csv(self, year: int, filtered: list, daily_prices_by_code: dict):
-        """종합된 투자경고 후보 목록과 시세 맵핑 딕셔너리를 Long Format CSV로 별도 기록합니다.
-
-        Args:
-            year (int): 출력 파일명에 명시할 연도 숫자.
-            filtered (list[InvestmentWarningStock]): 검증 과정을 통과한 도메인 인스턴스 배열.
-            daily_prices_by_code (dict[str, list[DailyPriceData]]): 종목 코드별 주가 리스트 모음.
-        """
-        records = []
-        for stock_info in filtered:
-            code = stock_info.code
-            prices = daily_prices_by_code.get(code, [])
-            for dp in sorted(prices, key=lambda x: x.date):
-                records.append(
-                    {
-                        "year": year,
-                        "code": code,
-                        "name": stock_info.name,
-                        "market": stock_info.market,
-                        "designation_date": stock_info.designation_date.strftime("%Y-%m-%d")
-                        if stock_info.designation_date
-                        else "",
-                        "release_date": stock_info.release_date.strftime("%Y-%m-%d") if stock_info.release_date else "",
-                        "date": dp.date.strftime("%Y-%m-%d"),
-                        "close": dp.close,
-                        "change_rate": dp.change_rate,
-                    }
-                )
-
+        """종합된 데이터를 Long Format CSV로 별도 기록합니다."""
+        records = self._build_csv_records(year, filtered, daily_prices_by_code)
         if not records:
             print("  CSV: 저장할 데이터 없음")
             return
+        self.storage.save_dataframe_csv(pd.DataFrame(records), self._csv_path(year))
 
-        df = pd.DataFrame(records)
-        csv_path = self._csv_path(year)
-        self.storage.save_dataframe_csv(df, csv_path)
-
-    def collect_year(self, year: int, include_active: bool = False) -> bool:
-        """지정한 연도 전체를 범위로 한 번에 종목을 탐색하고 시세를 수집·저장하는 백필 파이프라인.
+    def _build_csv_records(self, year: int, filtered: list, daily_prices_by_code: dict) -> list[dict]:
+        """필터링된 종목과 시세 데이터를 결합하여 CSV 저장용 레코드 리스트를 생성합니다.
 
         Args:
-            year (int): 기준 연도 4자리 (예: 2025).
-            include_active (bool): True일 시 아직 투자경고 해제일이 없는 진행중인 목록도 무조건 포괄.
+            year (int): 기준 연도.
+            filtered (list[InvestmentWarningStock]): 필터링 완료된 종목 목록.
+            daily_prices_by_code (dict): 종목별 시세 데이터 맵.
 
         Returns:
-            bool: 파이프라인이 중도 파기되지 않고 정상 저장/출력 이행 시 True 리턴.
+            list[dict]: 평면화된 데이터 딕셔너리 목록.
         """
-        start_date = f"{year}-01-01"
-        end_date = f"{year}-12-31"
+        records = []
+        for s in filtered:
+            prices = daily_prices_by_code.get(s.code, [])
+            for dp in sorted(prices, key=lambda x: x.date):
+                records.append(self._make_row(year, s, dp.date.strftime("%Y-%m-%d"), int(dp.close), dp.change_rate))
+        return records
 
-        if year == datetime.now().year:
-            end_date = datetime.now().strftime("%Y-%m-%d")
+    def collect_year(self, year: int, include_active: bool = False) -> bool:
+        """지정된 연도의 투자경고종목 데이터를 전체 백필(Backfill) 방식으로 수집합니다."""
+        print(f"\n[{year}년 전체 백필 시작]")
+        
+        filtered = self._step_y1_fetch_and_filter(year, include_active)
+        if not filtered: return False
+        
+        prices_by_code = self._step_y2_collect_prices(filtered)
+        if not prices_by_code: return False
+        
+        filtered = [s for s in filtered if prices_by_code.get(s.code)]
+        return self._step_y3_save_and_export(year, filtered, prices_by_code)
 
-        print(f"\n[1/4] {year}년 투자경고종목 백필...")
+    def _step_y1_fetch_and_filter(self, year: int, include_active: bool) -> list:
+        """[Step] 지정된 연도의 종목 목록을 가져오고 정해진 규칙에 따라 필터링합니다.
+
+        Args:
+            year (int): 수집 대상 연도.
+            include_active (bool): 해제일 미정 종목 포함 여부.
+
+        Returns:
+            list[InvestmentWarningStock]: 필터링된 종목 객체 리스트.
+        """
+        print(f"[1/4] '{year}' 연도 종목 스크래핑...")
+        start_date, end_date = f"{year}-01-01", f"{year}-12-31"
+        if year == datetime.now().year: end_date = datetime.now().strftime("%Y-%m-%d")
         try:
-            stock_list = fetch_investment_warning_stocks(start_date, end_date)
+            stocks = fetch_investment_warning_stocks(start_date, end_date)
+            filtered = self._filter_stocks(stocks, start_date, end_date, include_active)
+            print(f"  → 전체 {len(stocks)}종목 중 정책 부합 {len(filtered)}종목")
+            return filtered
         except Exception as e:
-            print(f"KRX 조회 실패: {e}")
-            return False
+            print(f"스크래핑 중 오류: {e}"); return []
 
-        # ── Step 2: 필터링 로직 (순수 파이썬)
-        filtered = []
-        for s in stock_list:
-            if s.designation_date is None:
-                continue
-            if s.market == "코넥스":
-                continue
+    def _step_y2_collect_prices(self, stocks: list) -> dict:
+        """[Step] 필터링된 종목들에 대해 필요한 전체 기간 시세를 일괄 수집합니다.
 
-            if s.release_date is not None:
-                if (s.release_date - s.designation_date).days > self.max_warning_days:
-                    continue
-            else:
-                if not include_active:
-                    continue
-            filtered.append(s)
+        Args:
+            stocks (list[InvestmentWarningStock]): 대상 종목 리스트.
 
-        print(f"  → 전체 {len(stock_list)}종목 중, 조건 부합 {len(filtered)}종목 처리")
-        if not filtered:
-            return False
-
-        # ── Step 3: 시세 조회
+        Returns:
+            dict: 종목코드를 키로, DailyPriceData 리스트를 값으로 갖는 맵.
+        """
         print("\n[3/4] 시세 데이터 수집...")
         try:
-            daily_prices_by_code = collect_daily_prices_batch(
-                filtered,
-                trading_days_after_release=self.trading_days_after_release,
-            )
+            return collect_daily_prices_batch(stocks, trading_days_after_release=self.trading_days_after_release)
         except Exception as e:
-            print(f"시세 수집 중 오류: {e}")
-            return False
+            print(f"시세 수집 중 오류: {e}"); return {}
 
-        # 빈 데이터 방지
-        filtered = [s for s in filtered if daily_prices_by_code.get(s.code)]
-        if not filtered:
-            print("  수집된 유효 시세 데이터가 없습니다.")
-            return False
+    def _step_y3_save_and_export(self, year: int, stocks: list, prices: dict) -> bool:
+        """[Step] 수집된 데이터를 영구 저장소에 기록하고 엑셀 리포트를 생성합니다.
 
-        # ── Step 4: 저장
+        Args:
+            year (int): 대상 연도.
+            stocks (list[InvestmentWarningStock]): 최종 포함된 종목 리스트.
+            prices (dict): 종목별 시세 데이터.
+
+        Returns:
+            bool: 저장 및 생성 성공 여부.
+        """
         print("\n[4/4] 결과 저장 (Parquet + Excel)...")
         self.storage.ensure_directory(self.output_dir)
-
-        # 4-a. Parquet 저장
-        self.repository.save_year(year, filtered, daily_prices_by_code)
-        print(f"  [Parquet] {year}.parquet 백필/저장 완료")
-
-        # 4-b. CSV 분리 저장
-        self._save_csv(year, filtered, daily_prices_by_code)
-
-        # 4-c. Excel 재생성
-        reloaded_stocks, reloaded_prices = self.repository.load_year(year)
-        wb = self.excel_exporter.export(year, reloaded_stocks, reloaded_prices)
-        xlsx_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
-        self.storage.save_workbook(wb, xlsx_path)
-
+        self.repository.save_year(year, stocks, prices)
+        self._save_csv(year, stocks, prices)
+        
+        re_stocks, re_prices = self.repository.load_year(year)
+        wb = self.excel_exporter.export(year, re_stocks, re_prices)
+        self.storage.save_workbook(wb, os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx"))
         print(f"\n  [완료] {year}년 수집 백필 및 Excel 생성 완료")
         return True
 
@@ -349,197 +337,216 @@ class WarningCollectionService:
     # ─────────────────────────────────────────────────────────────────────────
     # 증분 수집 메인 로직
     # ─────────────────────────────────────────────────────────────────────────
-    def collect_today(self, end_date: str, days: int = 1, include_active: bool = False) -> bool:
-        """가장 최신 영업일(들)의 델타 파편분만 증분(Incremental) 수집하고 분석 리포트를 갱신합니다.
-
-        진행중이던 기존 종목의 연장 시세를 우선 수집하고 추가로 모니터링 포착된 신규 지정 종목에 대해
-        전체 기간 주가를 소급 수집하는 과정을 조율합니다. 결과물로 파켓 백업 및 엑셀 재합성을 유도합니다.
+    def _step1_fetch_stocks(self, year: int, end_date: str, include_active: bool) -> tuple[list, list]:
+        """[Step] 증분 수집을 위해 현재 및 이전 연도의 종목 목록을 KRX에서 가져와 필터링합니다.
 
         Args:
-            end_date (str): 증분 체크 및 KRX 공시 스크랩 대상 범위 끝일('YYYY-MM-DD').
-            days (int): 오늘부터 N 영업일을 거슬러 모아 수집할 일수. 기본 1일치.
-            include_active (bool): 해제일이 없는 갓 지정된/진행중인 종목의 취급 여부.
+            year (int): 현재 처리 중인 연도.
+            end_date (str): 조회 종료일.
+            include_active (bool): 해제일 미정 종목 포함 여부.
 
         Returns:
-            bool: 엑셀 생성까지 완전 무결하게 완료된 경우 True. 작업 실패, 갱신점 부재 시 False 등.
+            tuple[list, list]: (전체 필터링 목록, 현재 연도 전용 필터링 목록)
         """
-        logger = setup_logging(end_date)
-        year = int(end_date[:4])
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         year_start = f"{year}-01-01"
-
-        logger.info("=" * 60)
-        logger.info(f"  투자경고종목 증분 수집: {end_date} (최근 {days}일)")
-        logger.info(f"  진행 중 종목 포함: {'예' if include_active else '아니오'}")
-        logger.info("=" * 60)
-
-        # ── Step 1: KRX 목록 조회
-        prev_csv_path = self._csv_path(year - 1)
-        prev_df_prefetch = self._load_existing_csv(prev_csv_path)
-        cross_year_unsettled = not prev_df_prefetch.empty and (prev_df_prefetch["release_date"] == "").any()
-
-        query_start = f"{year - 1}-01-01" if cross_year_unsettled else year_start
-        if cross_year_unsettled:
-            logger.info(
-                f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장"
-            )
-        else:
-            logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date})...")
-
-        try:
-            stock_list = fetch_investment_warning_stocks(query_start, end_date)
-        except Exception as e:
-            logger.error(f"KRX 조회 실패: {e}")
-            return False
-
+        cross_year = not self._load_existing_csv(self._csv_path(year - 1)).empty
+        query_start = f"{year - 1}-01-01" if cross_year else year_start
+        stock_list = fetch_investment_warning_stocks(query_start, end_date)
         all_filtered = self._filter_stocks(stock_list, query_start, end_date, include_active)
         filtered = [s for s in all_filtered if s.designation_date >= pd.to_datetime(year_start)]
-        logger.info(f"  → 전체 {len(all_filtered)}종목 / {year}년 대상 {len(filtered)}종목")
+        return all_filtered, filtered
 
-        if not all_filtered:
-            logger.warning("  조회 결과 없음. 종료.")
-            return False
+    def _step2_sync_and_load(self, year: int, all_filtered: list, logger: logging.Logger) -> tuple[list, dict]:
+        """[Step] 최신 해제일 정보를 동기화하고 해당 연도의 기존 데이터를 로드합니다.
 
-        # ── Step 2: release_date 동기화
+        Args:
+            year (int): 대상 연도.
+            all_filtered (list): KRX에서 가져온 전체 종목 목록.
+            logger (logging.Logger): 작업 로그를 기록할 로거.
+
+        Returns:
+            tuple[list, dict]: (기존 저장된 종목 리스트, 종목별 시세 맵)
+        """
         logger.info("[2/6] release_date 동기화 (현재·이전 연도 Parquet)...")
         self._sync_release_dates(year, all_filtered, logger)
+        return self.repository.load_year(year)
 
-        existing_stocks, existing_prices_by_code = self.repository.load_year(year)
-        existing_codes = {s.code for s in existing_stocks}
-        collected_dates: set[str] = set()
-        for price_list in existing_prices_by_code.values():
-            for dp in price_list:
-                collected_dates.add(dp.date.strftime("%Y-%m-%d"))
+    def _step3_get_dates(self, end_dt: datetime, days: int, existing_prices: dict) -> tuple[list[str], list[str]]:
+        """[Step] 수집이 필요한 타겟 영업일 목록과 누락된 날짜를 식별합니다.
 
-        # ── Step 3: 처리 대상 날짜 계산
-        adapter = PyKRXAdapter()
-        trading_days = adapter.get_trading_days(
-            start_date=end_dt - timedelta(days=days * 4 + 10),
-            end_date=end_dt,
-        )
+        Args:
+            end_dt (datetime): 기준 종료 일시.
+            days (int): 조회할 영업일 수.
+            existing_prices (dict): 기존에 이미 수집된 시세 데이터 맵.
+
+        Returns:
+            tuple[list[str], list[str]]: (전체 타겟 날짜 목록, 실제 수집이 필요한 누락 날짜 목록)
+        """
+        collected_dates = {dp.date.strftime("%Y-%m-%d") for plist in existing_prices.values() for dp in plist}
+        trading_days = PyKRXAdapter().get_trading_days(end_dt - timedelta(days=days * 4 + 10), end_dt)
         target_dates = [d.strftime("%Y-%m-%d") for d in trading_days[-days:]]
-
         if not target_dates:
-            logger.warning("  영업일 목록 조회 실패. 달력 기준 날짜로 대체합니다.")
             target_dates = [(end_dt - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days - 1, -1, -1)]
-
         missing_dates = [d for d in target_dates if d not in collected_dates]
-        logger.info(f"[3/6] 대상 날짜(영업일): {target_dates}")
-        logger.info(f"[3/6] 누락 날짜: {missing_dates} ({len(missing_dates)}/{len(target_dates)}일)")
+        return target_dates, missing_dates
 
-        if not missing_dates and not any(s.code not in existing_codes for s in filtered):
-            logger.info("  모든 데이터가 이미 최신 상태입니다. skip.")
-            return True
+    def _step45_collect_prices(self, year: int, filtered: list, existing_codes: set, missing_dates: list) -> list[dict]:
+        """[Step] 기존 종목의 누락 가격과 신규 종목의 전체 가격을 일괄 수집합니다.
 
-        # ── Step 4: 기존 종목 증분 추가
-        all_new_rows: list[dict] = []
+        Args:
+            year (int): 기준 연도.
+            filtered (list): 대상 종목 목록.
+            existing_codes (set): 이미 저장소에 존재하는 종목 코드 집합.
+            missing_dates (list): 수집이 필요한 누락 날짜 목록.
+
+        Returns:
+            list[dict]: 수집된 모든 신규 가격 데이터 행 리스트.
+        """
+        all_new_rows = []
         known_stocks = [s for s in filtered if s.code in existing_codes]
-
-        if missing_dates and known_stocks:
-            logger.info(f"[4/6] 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 수집...")
-            for date_str in missing_dates:
-                date_dt = datetime.strptime(date_str, "%Y-%m-%d")
-                market_df = adapter.get_daily_market_ohlcv(date_dt)
-                if market_df.empty:
-                    logger.info(f"  {date_str}: 휴장일 또는 데이터 없음, skip")
-                    continue
-
-                day_count = 0
-                for stock_info in known_stocks:
-                    code = stock_info.code
-                    if code not in market_df.index:
-                        continue
-                    row = market_df.loc[code]
-                    close = int(row.get("종가", 0))
-                    if close <= 0:
-                        continue
-                    change_rate = float(row.get("등락률", 0.0))
-                    all_new_rows.append(self._make_row(year, stock_info, date_str, close, change_rate))
-                    day_count += 1
-                logger.info(f"  {date_str}: {day_count}종목 추가")
-        else:
-            logger.info("[4/6] 기존 종목 시세 추가 없음 (skip)")
-
-        # ── Step 5: 신규 종목 전체 수집
+        all_new_rows.extend(self._collect_incremental_prices(year, missing_dates, known_stocks))
+        
         new_stocks = [s for s in filtered if s.code not in existing_codes]
-        if new_stocks:
-            logger.info(f"[5/6] 신규 {len(new_stocks)}종목 전체 기간 수집...")
-            try:
-                new_prices = collect_daily_prices_batch(
-                    new_stocks,
-                    trading_days_after_release=self.trading_days_after_release,
-                )
-            except Exception as e:
-                logger.error(f"신규 종목 시세 수집 실패: {e}")
-                new_prices = {}
+        all_new_rows.extend(self._collect_new_stock_prices(year, new_stocks))
+        return all_new_rows
 
-            for stock_info in new_stocks:
-                for dp in new_prices.get(stock_info.code, []):
-                    all_new_rows.append(
-                        self._make_row(
-                            year,
-                            stock_info,
-                            dp.date.strftime("%Y-%m-%d"),
-                            int(dp.close),
-                            dp.change_rate,
-                        )
-                    )
-        else:
-            logger.info("[5/6] 신규 종목 없음 (skip)")
+    def _collect_incremental_prices(self, year: int, missing_dates: list[str], known_stocks: list) -> list[dict]:
+        """이미 알고 있는 종목들에 대해 부족한 날짜의 시세를 시장 전종목 조회를 통해 채웁니다.
 
-        # ── Step 6: 병합 및 저장
-        logger.info("[6/6] 파일 저장 중...")
+        Args:
+            year (int): 기준 연도.
+            missing_dates (list[str]): 누락된 날짜 리스트.
+            known_stocks (list): 이미 알고 있는 종목 목록.
+
+        Returns:
+            list[dict]: 추출된 가격 레코드 목록.
+        """
+        all_new_rows = []
+        if not missing_dates or not known_stocks:
+            return all_new_rows
+        adapter = PyKRXAdapter()
+        for date_str in missing_dates:
+            date_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            market_df = adapter.get_daily_market_ohlcv(date_dt)
+            if not market_df.empty:
+                all_new_rows.extend(self._extract_prices_from_market(year, date_str, market_df, known_stocks))
+        return all_new_rows
+
+    def _extract_prices_from_market(self, year: int, date_str: str, market_df: pd.DataFrame, known_stocks: list) -> list[dict]:
+        """시장 전체 시세 데이터프레임에서 관심 종목들의 가격 정보만 추출합니다.
+
+        Args:
+            year (int): 기준 연도.
+            date_str (str): 대상 날짜 문자열.
+            market_df (pd.DataFrame): 시장 전체 시세 데이터.
+            known_stocks (list): 추출 대상 종목 목록.
+
+        Returns:
+            list[dict]: 추출된 행 리스트.
+        """
+        rows = []
+        for stock_info in known_stocks:
+            code = stock_info.code
+            if code in market_df.index:
+                close = int(market_df.loc[code].get("종가", 0))
+                if close > 0:
+                    change_rate = float(market_df.loc[code].get("등락률", 0.0))
+                    rows.append(self._make_row(year, stock_info, date_str, close, change_rate))
+        return rows
+
+    def _collect_new_stock_prices(self, year: int, new_stocks: list) -> list[dict]:
+        """새로 발견된 종목들에 대해 개별 종목 시세 조회를 통해 전체 시세를 수집합니다.
+
+        Args:
+            year (int): 기준 연도.
+            new_stocks (list): 신규 종목 목록.
+
+        Returns:
+            list[dict]: 수집된 가격 레코드 리스트.
+        """
+        all_new_rows = []
+        if not new_stocks:
+            return all_new_rows
+        new_prices_map = collect_daily_prices_batch(new_stocks, trading_days_after_release=self.trading_days_after_release)
+        for stock_info in new_stocks:
+            for dp in new_prices_map.get(stock_info.code, []):
+                all_new_rows.append(self._make_row(year, stock_info, dp.date.strftime("%Y-%m-%d"), int(dp.close), dp.change_rate))
+        return all_new_rows
+
+    def _step6_merge_save(self, year: int, filtered: list, all_new_rows: list[dict], existing_stocks: list, existing_prices: dict) -> bool:
+        """[Step] 수집된 신규 데이터를 기존 데이터와 병합하고 파일로 저장하며 리포트를 갱신합니다.
+
+        Args:
+            year (int): 기준 연도.
+            filtered (list): 실시간 필터링된 전체 종목 목록.
+            all_new_rows (list): 이번에 새로 수집된 시세 레코드.
+            existing_stocks (list): 기존 저장소에 있던 종목 리스트.
+            existing_prices (dict): 기존 저장소에 있던 시세 맵.
+
+        Returns:
+            bool: 전체 과정 성공 여부.
+        """
         if not all_new_rows:
-            if not existing_stocks:
-                logger.warning("추가할 데이터 없음.")
-                return False
-            logger.info("  신규 행 없음. Excel 재생성만 수행.")
-            final_stocks, final_prices = existing_stocks, existing_prices_by_code
+            if not existing_stocks: return False
+            final_stocks, final_prices = existing_stocks, existing_prices
         else:
-            new_stocks_map: dict[str, InvestmentWarningStock] = {s.code: s for s in filtered}
-            new_prices_map: dict[str, list[DailyPriceData]] = {}
-            for row in all_new_rows:
-                code = row["code"]
-                stock = new_stocks_map.get(code)
-                if stock is None:
-                    continue
-                dp = DailyPriceData(
-                    code=code,
-                    name=row["name"],
-                    date=datetime.strptime(row["date"], "%Y-%m-%d"),
-                    close=float(row["close"]),
-                    change_rate=float(row["change_rate"]),
-                )
-                new_prices_map.setdefault(code, []).append(dp)
-
-            self.storage.ensure_directory(self.output_dir)
-
-            self.repository.append_year(year, list(new_stocks_map.values()), new_prices_map)
-            logger.info(f"  Parquet 증분 저장완료 (+{len(all_new_rows)}행)")
-
-            new_df = pd.DataFrame(all_new_rows)
-            csv_path = self._csv_path(year)
-            prev_csv = self._load_existing_csv(csv_path)
-            updated_df = (
-                pd.concat([prev_csv, new_df], ignore_index=True)
-                .drop_duplicates(subset=["code", "designation_date", "date"])
-                .sort_values(["code", "designation_date", "date"])
-                .reset_index(drop=True)
-            )
-            self.storage.save_dataframe_csv(updated_df, csv_path)
-            logger.info(f"  CSV 저장: {os.path.basename(csv_path)} ({len(updated_df):,}행)")
-
+            self._save_incremental_dfs(year, filtered, all_new_rows)
             final_stocks, final_prices = self.repository.load_year(year)
 
         wb = self.excel_exporter.export(year, final_stocks, final_prices)
-        xlsx_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
-        self.storage.save_workbook(wb, xlsx_path)
-
-        logger.info(
-            f"[완료] 신규 {len(new_stocks)}종목 전체 수집 / 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 추가"
-        )
-        logger.info("=" * 60)
+        self.storage.save_workbook(wb, os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx"))
         return True
+
+    def _save_incremental_dfs(self, year: int, filtered: list, all_new_rows: list[dict]) -> None:
+        """증분 결과물을 Parquet와 CSV에 병합 저장합니다."""
+        stk_map, prc_map = self._build_incremental_maps(filtered, all_new_rows)
+        self.storage.ensure_directory(self.output_dir)
+        self.repository.append_year(year, list(stk_map.values()), prc_map)
+        
+        path = self._csv_path(year)
+        merged = pd.concat([self._load_existing_csv(path), pd.DataFrame(all_new_rows)], ignore_index=True)
+        final = merged.drop_duplicates(subset=["code", "designation_date", "date"]) \
+                      .sort_values(["code", "designation_date", "date"]).reset_index(drop=True)
+        self.storage.save_dataframe_csv(final, path)
+
+    def _build_incremental_maps(self, filtered, new_rows) -> tuple[dict, dict]:
+        """증분 수집 행들을 기반으로 저장소 업데이트용 도메인 객체 맵을 구축합니다.
+
+        Args:
+            filtered (list): 실시간 종목 리스트.
+            new_rows (list): 신규 수집된 시세 데이터 행.
+
+        Returns:
+            tuple[dict, dict]: (종합 종목 맵, 신규 시세 데이터 맵)
+        """
+        stk_map = {s.code: s for s in filtered}
+        prc_map = {}
+        for r in new_rows:
+            if r["code"] in stk_map:
+                dp = DailyPriceData(code=r["code"], name=r["name"], date=datetime.strptime(r["date"], "%Y-%m-%d"), close=float(r["close"]), change_rate=float(r["change_rate"]))
+                prc_map.setdefault(r["code"], []).append(dp)
+        return stk_map, prc_map
+
+    def collect_today(self, end_date: str, days: int = 1, include_active: bool = False) -> bool:
+        """가장 최신 영업일(들)의 델타 파편분만 증분(Incremental) 수집하고 분석 리포트를 갱신합니다."""
+        logger, year, end_dt = setup_logging(end_date), int(end_date[:4]), datetime.strptime(end_date, "%Y-%m-%d")
+        
+        try:
+            all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+        except Exception as e:
+            logger.error(f"KRX 조회 실패: {e}")
+            return False
+            
+        if not all_filtered: return False
+        
+        existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
+        existing_codes = {s.code for s in existing_stocks}
+        
+        target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
+        if not missing_dates and not any(s.code not in existing_codes for s in filtered): return True
+
+        all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
+        return self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
 
 
 class ReportGenerationService:
