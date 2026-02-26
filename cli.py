@@ -4,32 +4,36 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from investment_hub.core.ports.storage_port import StoragePort
+from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 저장소 설정 헬퍼 (Composition Root)
+# 저장소 및 레포지토리 설정 헬퍼 (Composition Root)
 # ─────────────────────────────────────────────────────────────────────────────
 
-
-def _setup_storage(args: argparse.Namespace) -> None:
-    """CLI 인자에 따라 저장소 어댑터를 생성하고 전역 storage로 설정합니다."""
-    from collect_yearly_warnings import set_storage
-
+def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryAdapter]:
+    """CLI 인자에 따라 저장소 어댑터와 레포지토리를 생성하여 반환합니다."""
     storage_type = getattr(args, "storage", "local")
+
     if storage_type == "drive":
         from investment_hub.infrastructure.adapters.google_drive_adapter import GoogleDriveAdapter
-
         token_file = getattr(args, "token_file", "secrets/token.json")
         client_secret = getattr(args, "client_secret", "secrets/client_secret.json")
         drive_folder = getattr(args, "drive_folder", "KRX_Auto_Crawling_Data")
         print(f"[설정] Google Drive 저장소 사용 (Token: {token_file})")
-        storage = GoogleDriveAdapter(
+        storage: StoragePort = GoogleDriveAdapter(
             token_file=token_file,
             root_folder_name=drive_folder,
             client_secret_file=client_secret,
         )
-        set_storage(storage)
     else:
+        from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
         print("[설정] 로컬 저장소 사용")
-        # collect_yearly_warnings의 기본값(LocalStorageAdapter)이 이미 설정되어 있음
+        storage = LocalStorageAdapter()
+
+    # Repository는 Parquet을 기본으로 사용
+    repository = ParquetRepositoryAdapter(base_dir="output/parquet")
+    return storage, repository
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -39,7 +43,7 @@ def _setup_storage(args: argparse.Namespace) -> None:
 
 def cmd_today(args: argparse.Namespace) -> int:
     """오늘(또는 지정 날짜) 증분 수집"""
-    _setup_storage(args)
+    storage, repository = _setup_di(args)
 
     target_date = args.date
     try:
@@ -52,9 +56,10 @@ def cmd_today(args: argparse.Namespace) -> int:
         print(f"[오류] 미래 날짜는 수집할 수 없습니다: {target_date}")
         return 1
 
-    from collect_today import collect_today
+    from investment_hub.application.services import WarningCollectionService
 
-    ok = collect_today(
+    service = WarningCollectionService(repository=repository, storage=storage)
+    ok = service.collect_today(
         end_date=target_date,
         days=args.days,
         include_active=args.include_active,
@@ -64,9 +69,10 @@ def cmd_today(args: argparse.Namespace) -> int:
 
 def cmd_year(args: argparse.Namespace) -> int:
     """연도 범위 수집"""
-    _setup_storage(args)
+    storage, repository = _setup_di(args)
 
-    from collect_yearly_warnings import YEAR_RANGES, collect_year
+    # 임시 하드코딩
+    YEAR_RANGES = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
     if args.year:
         years = [args.year]
@@ -85,9 +91,12 @@ def cmd_year(args: argparse.Namespace) -> int:
     print(f"  연도별 데이터 수집: {valid_years}")
     print(f"{'=' * 60}")
 
+    from investment_hub.application.services import WarningCollectionService
+
+    service = WarningCollectionService(repository=repository, storage=storage)
     results = {}
     for year in valid_years:
-        ok = collect_year(year, include_active=args.include_active)
+        ok = service.collect_year(year, include_active=args.include_active)
         results[year] = "[완료]" if ok else "[실패/데이터없음]"
 
     print(f"\n{'=' * 60}")
@@ -97,6 +106,18 @@ def cmd_year(args: argparse.Namespace) -> int:
         print(f"  {year}년: {status}")
 
     return 0
+
+
+def cmd_export_excel(args: argparse.Namespace) -> int:
+    """Parquet 파일에서 Excel 리포트를 재생성합니다."""
+    storage, repository = _setup_di(args)
+
+    from investment_hub.application.services import ReportGenerationService
+
+    service = ReportGenerationService(repository=repository, storage=storage)
+    year = args.year
+    ok = service.generate_excel_report(year=year)
+    return 0 if ok else 1
 
 
 def cmd_scheduler(args: argparse.Namespace) -> int:
@@ -241,6 +262,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="해제일 없는 진행 중 종목도 포함",
     )
     p_year.set_defaults(func=cmd_year)
+
+    # ── export-excel ──────────────────────────────────────────────────────────
+    p_export = subparsers.add_parser(
+        "export-excel",
+        parents=[storage_parser],
+        help="Excel 리포트 재생성",
+        description="Parquet 데이터에서 Excel 리포트를 다시 생성합니다.",
+    )
+    p_export.add_argument("--year", type=int, required=True, help="재생성할 연도")
+    p_export.set_defaults(func=cmd_export_excel)
 
     # ── scheduler ─────────────────────────────────────────────────────────────
     p_sched = subparsers.add_parser(

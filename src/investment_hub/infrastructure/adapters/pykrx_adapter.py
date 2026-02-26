@@ -236,6 +236,28 @@ class PyKRXAdapter:
             print(f"  [OHLCV API ERROR] {ticker}: {e}")
             return pd.DataFrame()
 
+    def get_trading_days(self, start_date: datetime, end_date: datetime) -> list[datetime]:
+        """
+        특정 기간 내의 실제 거래일(영업일) 목록을 가져옵니다.
+
+        Args:
+            start_date: 시작 날짜
+            end_date: 종료 날짜
+
+        Returns:
+            실제 거래일 datetime 리스트
+        """
+        start_str = start_date.strftime("%Y%m%d")
+        end_str = end_date.strftime("%Y%m%d")
+
+        try:
+            # 삼성전자(005930)를 기준으로 거래일 목록 조회
+            df = stock.get_market_ohlcv_by_date(start_str, end_str, "005930")
+            return [d.to_pydatetime() for d in df.index]
+        except Exception as e:
+            print(f"  [TRADING DAYS ERROR] {e}")
+            return []
+
     def get_daily_market_ohlcv(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> pd.DataFrame:
         """
         특정 날짜의 전 종목 OHLCV 데이터를 가져옵니다.

@@ -8,7 +8,9 @@ from investment_hub.domain.models import InvestmentWarningStock
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 
 
-def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:
+def fetch_investment_warning_stocks(
+    start_date: str | None = None, end_date: str | None = None
+) -> list[InvestmentWarningStock]:
     """
     Fetches the list of 'Investment Warning' stocks from KRX KIND.
 

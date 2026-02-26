@@ -18,6 +18,16 @@ class StoragePort(ABC):
         pass
 
     @abstractmethod
+    def save_parquet(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
+        """DataFrame을 Parquet 파일로 지정된 경로에 저장합니다."""
+        pass
+
+    @abstractmethod
+    def load_parquet(self, path: str, **kwargs) -> pd.DataFrame:
+        """지정된 경로에서 Parquet 파일을 읽어 DataFrame으로 반환합니다."""
+        pass
+
+    @abstractmethod
     def save_workbook(self, book: openpyxl.Workbook, path: str) -> bool:
         """openpyxl Workbook 객체를 지정된 경로에 저장합니다."""
         pass
