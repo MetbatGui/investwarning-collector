@@ -14,10 +14,10 @@ from investment_hub.core.ports.storage_port import StoragePort
 
 
 class GoogleDriveAdapter(StoragePort):
-    """Google Drive 저장소 Adapter.
+    """Google Drive 클라우드를 전역 스토리지로 활용하는 외부 어댑터.
 
-    StoragePort를 구현하여 Google Drive에 데이터를 저장하고 로드합니다.
-    OAuth 2.0 Token을 사용하여 인증합니다.
+    Google Drive API (v3) 와 OAuth 2.0 Credentials를 이용하여 대상 파일(스프레드시트, Parquet 등)의
+    청크 업로드 및 다운로드를 원활하게 수행할 수 있도록 StoragePort를 구체화합니다.
     """
 
     SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -29,7 +29,18 @@ class GoogleDriveAdapter(StoragePort):
         root_folder_id: str | None = None,
         client_secret_file: str | None = None,
     ):
-        """GoogleDriveAdapter 초기화."""
+        """GoogleDriveAdapter 연결 관리 초기화.
+
+        Args:
+            token_file (str): OAuth 2.0 사용자 토큰 파일 상대/절대 경로.
+            root_folder_name (str): 구글 드라이브 최상단 기준 대상 폴더명. 기본 "KRX_Auto_Crawling_Data"
+            root_folder_id (str | None): 폴더명 대신 직접 ID로 맵핑해야 할 때 사용.
+            client_secret_file (str | None): 자격 증명 갱신에 사용될 구글 클라우드 secret 파일의 위치.
+
+        Raises:
+            ValueError: `token_file` 값이 전액 부재일 때.
+            FileNotFoundError: `token_file` 에 명시된 물리적 토큰 json 이 발견되지 않을 경우.
+        """
         self.token_file = token_file
         self.client_secret_file = client_secret_file
 
@@ -113,7 +124,16 @@ class GoogleDriveAdapter(StoragePort):
         return current_parent_id
 
     def save_dataframe_excel(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
-        """DataFrame을 Excel 파일로 저장 (업로드)."""
+        """DataFrame을 내부 io 버퍼로 Excel 엔진 변환 후 API를 거쳐 드라이브에 업로드합니다.
+
+        Args:
+            df (pd.DataFrame): 엑셀로 기록할 데이터 시퀀스 매핑.
+            path (str): 루트를 기준으로 한 파일 상대 경로명.
+            **kwargs: `df.to_excel()` 기록용 추가 옵션.
+
+        Returns:
+            bool: 원격 업로드 성공 시 True 반환.
+        """
         try:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
@@ -128,7 +148,16 @@ class GoogleDriveAdapter(StoragePort):
             return False
 
     def save_dataframe_csv(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
-        """DataFrame을 CSV 파일로 저장 (업로드)."""
+        """DataFrame을 내부 텍스트 버퍼 변환 후 외부 드라이브 경로에 CSV로 업로드 보관합니다.
+
+        Args:
+            df (pd.DataFrame): 텍스트 데이터.
+            path (str): 원격에 생성될 기준 파일명과 상대경로.
+            **kwargs: `df.to_csv()` 추가 출력 규격 옵션.
+
+        Returns:
+            bool: 에러 없이 트랜잭션이 종료되면 True.
+        """
         try:
             encoding = kwargs.pop("encoding", "utf-8-sig")  # utf-8-sig 기본값 사용 호환성
 
@@ -148,7 +177,16 @@ class GoogleDriveAdapter(StoragePort):
             return False
 
     def save_parquet(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
-        """DataFrame을 Parquet 파일로 저장 (업로드)."""
+        """DataFrame을 Parquet 규격으로 원격 클라우드 드라이브에 직접 업로드 기록합니다.
+
+        Args:
+            df (pd.DataFrame): 압축 저장할 판다스 객체.
+            path (str): 대상 디렉토리/파일명 조합 문자열 지시자.
+            **kwargs: `engine='pyarrow'`와 수반되는 여타의 옵션들.
+
+        Returns:
+            bool: 전송 문제 없이 완료되었으면 True.
+        """
         try:
             output = io.BytesIO()
             df.to_parquet(output, engine="pyarrow", **kwargs)
@@ -163,7 +201,15 @@ class GoogleDriveAdapter(StoragePort):
             return False
 
     def save_workbook(self, book: openpyxl.Workbook, path: str) -> bool:
-        """openpyxl Workbook 저장 (업로드)."""
+        """엑셀 Workbook 객체를 스트림 버퍼화 하여 드라이브에 .xlsx mime 타입으로 업로드합니다.
+
+        Args:
+            book (openpyxl.Workbook): 서식이 구비된 엑셀 매핑 객체.
+            path (str): 원격 위치 이름 규격.
+
+        Returns:
+            bool: 청크 전송과 ID 갱신 무관하게 최종 확인된 응답일 때 True.
+        """
         try:
             output = io.BytesIO()
             book.save(output)
@@ -195,7 +241,14 @@ class GoogleDriveAdapter(StoragePort):
             self.drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
 
     def load_workbook(self, path: str) -> openpyxl.Workbook | None:
-        """Excel Workbook 로드 (다운로드)."""
+        """구글 드라이브 내 지정 파일을 다운로드 받아 파싱이 완료된 Workbook 형식으로 전달합니다.
+
+        Args:
+            path (str): 조회/다운로드 할 .xlsx 대응 파일 상대경로.
+
+        Returns:
+            openpyxl.Workbook | None: 성공적으로 파싱된 엑셀 워크북, 미존재 시 None.
+        """
         try:
             file_id = self._get_file_id(path)
             if not file_id:
@@ -234,7 +287,16 @@ class GoogleDriveAdapter(StoragePort):
             return False
 
     def load_dataframe(self, path: str, sheet_name: str | None = None, **kwargs) -> pd.DataFrame:
-        """Excel/CSV 파일에서 DataFrame을 로드 (다운로드)."""
+        """구글 드라이브의 Excel 혹은 CSV 파일을 스트림으로 다운로드 직후 DataFrame 객체로 렌더링합니다.
+
+        Args:
+            path (str): 타겟 탐색 원격 파일의 닉네임 혹은 루트 기준 경로 이름.
+            sheet_name (str | None): 시트 타겟 지시 객체. (csv면 제외)
+            **kwargs: `pd.read_csv`, `pd.read_excel` 기능 스위치 추가 전달자.
+
+        Returns:
+            pd.DataFrame: 데이터 포함된 프레임, I/O나 기타 예외시 빈 생성 프레임 반환.
+        """
         try:
             file_id = self._get_file_id(path)
             if not file_id:
@@ -259,7 +321,15 @@ class GoogleDriveAdapter(StoragePort):
             return pd.DataFrame()
 
     def load_parquet(self, path: str, **kwargs) -> pd.DataFrame:
-        """Parquet 파일에서 DataFrame을 로드 (다운로드)."""
+        """Google Drive 서버의 타겟 위치에서 Parquet 파일을 내려받아 DataFrame으로 변환합니다.
+
+        Args:
+            path (str): 클라우드 폴더 상의 .parquet 파일경로.
+            **kwargs: 읽어오는데 쓰일 인자.
+
+        Returns:
+            pd.DataFrame: 원격 Parquet 데이터의 판다스 프레임.
+        """
         try:
             file_id = self._get_file_id(path)
             if not file_id:
@@ -279,7 +349,14 @@ class GoogleDriveAdapter(StoragePort):
             return pd.DataFrame()
 
     def get_file(self, path: str) -> bytes | None:
-        """파일의 내용을 바이트로 읽어옵니다 (다운로드)."""
+        """API 연동을 통해 단일 원격 파일 요소의 전체 바이트를 시스템 상으로 동기 다운로드합니다.
+
+        Args:
+            path (str): 단일 파일 클라우드 내 지시 위치 문자열.
+
+        Returns:
+            bytes | None: 파일 내부 contents가 반환되며, 소진되거나 에러시 원소 None.
+        """
         try:
             file_id = self._get_file_id(path)
             if not file_id:
@@ -299,7 +376,15 @@ class GoogleDriveAdapter(StoragePort):
             return None
 
     def put_file(self, path: str, data: bytes) -> bool:
-        """바이트 데이터를 파일로 저장합니다 (업로드)."""
+        """로컬 메모리의 바이트 콘텐츠를 Google Drive 특정 위치에 새로운 단일 파일로 업로드 작성합니다.
+
+        Args:
+            path (str): 드라이브 상에서 파일 이름 확장자까지 포함된 절대 도달 경로식 이름.
+            data (bytes): 원시 이진 버퍼.
+
+        Returns:
+            bool: 청크 기록 완전 이행 성공 시 True 제공.
+        """
         try:
             if path.endswith(".xlsx"):
                 mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

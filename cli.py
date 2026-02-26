@@ -12,7 +12,16 @@ from investment_hub.infrastructure.adapters.parquet_repository_adapter import Pa
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryAdapter]:
-    """CLI 인자에 따라 저장소 어댑터와 레포지토리를 생성하여 반환합니다."""
+    """CLI 인자(args)에 따라 의존성을 가지는 저장소 어댑터와 레포지토리 객체를 생성 및 주입합니다.
+
+    Args:
+        args (argparse.Namespace): 사용자가 CLI를 통해 입력한 파라미터 묶음(Storage Type 등 포함).
+
+    Returns:
+        tuple[StoragePort, ParquetRepositoryAdapter]:
+            - 선택된 스토리지 포트 구현체 (Local 혹은 Google Drive)
+            - 데이터를 취급할 Parquet 레포지터리 어댑터
+    """
     storage_type = getattr(args, "storage", "local")
 
     if storage_type == "drive":
@@ -42,7 +51,14 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryA
 
 
 def cmd_today(args: argparse.Namespace) -> int:
-    """오늘(또는 지정 날짜) 증분 수집"""
+    """오늘(또는 지정 날짜) 기준으로 가장 최근 영업일의 데이터를 증분 수집합니다.
+
+    Args:
+        args (argparse.Namespace): `--date`, `--days`, `--include-active` 등의 인자.
+
+    Returns:
+        int: 정상 처리 시 0 (성공), 오류 및 비정상 종료 시 1.
+    """
     storage, repository = _setup_di(args)
 
     target_date = args.date
@@ -68,7 +84,14 @@ def cmd_today(args: argparse.Namespace) -> int:
 
 
 def cmd_year(args: argparse.Namespace) -> int:
-    """연도 범위 수집"""
+    """단일 연도 혹여 연속된 연도 범위 전체의 데이터를 한 번에(백필) 수집합니다.
+
+    Args:
+        args (argparse.Namespace): `--year` 단일 연도 혹은 `--start`, `--end` 범위 지정 인자.
+
+    Returns:
+        int: 최소 하나 이상 수집 대상이 올바를 때 0을 리턴. 인자 에러 시 1 반환.
+    """
     storage, repository = _setup_di(args)
 
     # 임시 하드코딩
@@ -109,7 +132,14 @@ def cmd_year(args: argparse.Namespace) -> int:
 
 
 def cmd_export_excel(args: argparse.Namespace) -> int:
-    """Parquet 파일에서 Excel 리포트를 재생성합니다."""
+    """Parquet 파일 데이터를 기반으로 Excel 뷰어 리포트를 단독 재생성합니다.
+
+    Args:
+        args (argparse.Namespace): 엑셀을 재작성할 `--year` 타겟 인자.
+
+    Returns:
+        int: 리포트 재생성 성공시 0, 에러시 1.
+    """
     storage, repository = _setup_di(args)
 
     from investment_hub.application.services import ReportGenerationService
@@ -121,7 +151,14 @@ def cmd_export_excel(args: argparse.Namespace) -> int:
 
 
 def cmd_scheduler(args: argparse.Namespace) -> int:
-    """Windows 작업 스케줄러 관리"""
+    """Windows 작업 스케줄러를 등록하거나 제거/상태확인을 보조합니다.
+
+    Args:
+        args (argparse.Namespace): `install`, `uninstall`, `status` 여부를 담은 action 인자.
+
+    Returns:
+        int: powershell 스크립트의 서브프로세스 종료 반환코드.
+    """
     task_name = "InvestWarningCollector"
     ps1 = Path(__file__).parent / "setup_scheduler.ps1"
 
@@ -169,6 +206,11 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """애플리케이션 전반의 CLI 인수(Argument) 구조 파서를 조립하고 반환합니다.
+
+    Returns:
+        argparse.ArgumentParser: 명령어 라우팅용 서브명령어가 정의된 파서 인스턴스.
+    """
     parser = argparse.ArgumentParser(
         prog="cli",
         description="투자경고종목 수집기",
@@ -295,6 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    """스크립트 호출 시 메인 진입지점으로, 명령어를 파싱하고 적절한 커맨드 핸들러로 위임합니다."""
     parser = build_parser()
     args = parser.parse_args()
     if not hasattr(args, "func"):
