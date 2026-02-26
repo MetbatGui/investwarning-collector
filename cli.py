@@ -11,6 +11,7 @@ from investment_hub.infrastructure.adapters.parquet_repository_adapter import Pa
 # 저장소 및 레포지토리 설정 헬퍼 (Composition Root)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryAdapter]:
     """CLI 인자(args)에 따라 의존성을 가지는 저장소 어댑터와 레포지토리 객체를 생성 및 주입합니다.
 
@@ -26,6 +27,7 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryA
 
     if storage_type == "drive":
         from investment_hub.infrastructure.adapters.google_drive_adapter import GoogleDriveAdapter
+
         token_file = getattr(args, "token_file", "secrets/token.json")
         client_secret = getattr(args, "client_secret", "secrets/client_secret.json")
         drive_folder = getattr(args, "drive_folder", "KRX_Auto_Crawling_Data")
@@ -37,6 +39,7 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryA
         )
     else:
         from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
+
         print("[설정] 로컬 저장소 사용")
         storage = LocalStorageAdapter()
 

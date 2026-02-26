@@ -51,7 +51,7 @@ def test_build_rows_filtering(exporter, sample_stock, sample_prices):
             DailyPriceData(code="005930", name="삼성전자", date=datetime(2025, 1, 8), close=97000, change_rate=1.0),
             DailyPriceData(code="005930", name="삼성전자", date=datetime(2025, 1, 9), close=98000, change_rate=1.0),
             DailyPriceData(code="005930", name="삼성전자", date=datetime(2025, 1, 10), close=99000, change_rate=1.0),
-            DailyPriceData(code="005930", name="삼성전자", date=datetime(2025, 1, 15), close=100000, change_rate=2.0)
+            DailyPriceData(code="005930", name="삼성전자", date=datetime(2025, 1, 15), close=100000, change_rate=2.0),
         ]
     )
 

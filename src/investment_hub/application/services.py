@@ -46,6 +46,7 @@ def setup_logging(date_str: str) -> logging.Logger:
 
     return logger
 
+
 class WarningCollectionService:
     """KRX 기업공시 시스템의 투자경고 종목 추출부터 내부 파켓 저장, 엑셀 생성을 주관하는 파이프라인.
 
@@ -75,9 +76,7 @@ class WarningCollectionService:
         self.output_dir = output_dir
         self.max_warning_days = max_warning_days
         self.trading_days_after_release = trading_days_after_release
-        self.excel_exporter = WarningExcelExporter(
-            trading_days_after_release=trading_days_after_release
-        )
+        self.excel_exporter = WarningExcelExporter(trading_days_after_release=trading_days_after_release)
 
     def _csv_path(self, year: int) -> str:
         return os.path.join(self.output_dir, f"투자경고종목분석({year}년).csv")
@@ -381,7 +380,9 @@ class WarningCollectionService:
 
         query_start = f"{year - 1}-01-01" if cross_year_unsettled else year_start
         if cross_year_unsettled:
-            logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장")
+            logger.info(
+                f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장"
+            )
         else:
             logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date})...")
 
@@ -562,9 +563,7 @@ class ReportGenerationService:
         self.repository = repository
         self.storage = storage
         self.output_dir = output_dir
-        self.excel_exporter = WarningExcelExporter(
-            trading_days_after_release=trading_days_after_release
-        )
+        self.excel_exporter = WarningExcelExporter(trading_days_after_release=trading_days_after_release)
 
     def generate_excel_report(self, year: int) -> bool:
         """지정한 연착 연도의 파켓 복합 뷰어를 호출하여 .xlsx 포맷 리포트를 강제 단독 재생산합니다.

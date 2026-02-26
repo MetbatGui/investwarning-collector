@@ -15,6 +15,7 @@ class InvestmentWarningStock:
         designation_date (datetime): 투자경고 지정일
         release_date (datetime | None): 투자경고 해제일. 아직 해제되지 않은 경우 None.
     """
+
     code: str
     name: str
     market: str
@@ -123,6 +124,7 @@ class DailyPriceData:
         close (float): 해당 일의 종가
         change_rate (float): 전일 대비 등락률 (%)
     """
+
     code: str
     name: str
     date: datetime
