@@ -11,15 +11,17 @@ from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 def fetch_investment_warning_stocks(
     start_date: str | None = None, end_date: str | None = None
 ) -> list[InvestmentWarningStock]:
-    """
-    Fetches the list of 'Investment Warning' stocks from KRX KIND.
+    """KRX KIND 기업공시 채널에서 특정 기간 동안의 '투자경고종목' 지정 내역을 크롤링합니다.
+
+    지정일, 해제일, 종목명 등의 메타데이터를 수집하며, 종목 코드는 PyKRXAdapter의
+    Ticker 매핑 캐시를 활용하여 연결합니다.
 
     Args:
-        start_date (str): Start date for search (YYYY-MM-DD). Defaults to 1 year ago.
-        end_date (str): End date for search (YYYY-MM-DD). Defaults to today.
+        start_date (str | None): 검색 시작일 (YYYY-MM-DD 포맷). 기본값은 오늘로부터 1년 전.
+        end_date (str | None): 검색 종료일 (YYYY-MM-DD 포맷). 기본값은 오늘 날짜.
 
     Returns:
-        List[InvestmentWarningStock]: List of domain objects.
+        list[InvestmentWarningStock]: 수집 정보가 매핑된 도메인 객체 리스트. 수집 실패 시 빈 리스트 반환.
     """
     url = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
 

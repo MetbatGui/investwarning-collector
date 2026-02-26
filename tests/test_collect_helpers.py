@@ -16,6 +16,7 @@ from investment_hub.infrastructure.adapters.parquet_repository_adapter import Pa
 # 픽스처
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture
 def service():
     # 저장소는 메모리 수준이나 더미 경로 등 동작만 검증할 수 있는 객체 할당
@@ -28,6 +29,7 @@ def service():
         max_warning_days=60,
     )
 
+
 def _make_stock(code, name="테스트", market="코스피", desig="2026-01-02", release=None):
     return InvestmentWarningStock(
         code=code,
@@ -37,9 +39,11 @@ def _make_stock(code, name="테스트", market="코스피", desig="2026-01-02", 
         release_date=pd.to_datetime(release) if release else None,
     )
 
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _filter_stocks
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestFilterStocks:
     def test_basic_pass_through(self, service):

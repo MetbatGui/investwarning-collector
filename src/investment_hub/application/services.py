@@ -9,8 +9,8 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
-from investment_hub.core.ports.repository_port import WarningStockRepository
 
+from investment_hub.core.ports.repository_port import WarningStockRepository
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
@@ -46,8 +46,13 @@ def setup_logging(date_str: str) -> logging.Logger:
 
     return logger
 
+
 class WarningCollectionService:
-    """투자경고종목 수집을 오케스트레이션하는 애플리케이션 서비스"""
+    """KRX 기업공시 시스템의 투자경고 종목 추출부터 내부 파켓 저장, 엑셀 생성을 주관하는 파이프라인.
+
+    수집한 투자경고 데이터를 DB(파켓)에 저장하고, CSV 및 엑셀(openpyxl)
+    리포트를 산출하는 End-to-End Orchestrator 역할을 수행합니다.
+    """
 
     def __init__(
         self,
@@ -57,20 +62,33 @@ class WarningCollectionService:
         max_warning_days: int = 60,
         trading_days_after_release: int = 3,
     ):
+        """WarningCollectionService 초기화 및 포트 주입.
+
+        Args:
+            repository (WarningStockRepository): 파켓 등의 연도별 저장소 어댑터 포트 개체.
+            storage (StoragePort): 로컬/구글 드라이브 입출력을 위한 어댑터 포트 개체.
+            output_dir (str): 파일이 저장될 최상위 디렉토리 명칭. 기본값 "output".
+            max_warning_days (int): 최대 허용 경고일수(지정~해제). 해당 값을 넘길시 오류로 간주해 필터링. 기본 60.
+            trading_days_after_release (int): 해제일 기준 이후 시세를 추적할(수집할) 추가 최대 영업일. 기본 3.
+        """
         self.repository = repository
         self.storage = storage
         self.output_dir = output_dir
         self.max_warning_days = max_warning_days
         self.trading_days_after_release = trading_days_after_release
-        self.excel_exporter = WarningExcelExporter(
-            trading_days_after_release=trading_days_after_release
-        )
+        self.excel_exporter = WarningExcelExporter(trading_days_after_release=trading_days_after_release)
 
     def _csv_path(self, year: int) -> str:
         return os.path.join(self.output_dir, f"투자경고종목분석({year}년).csv")
 
     def _save_csv(self, year: int, filtered: list, daily_prices_by_code: dict):
-        """연도별 상세 CSV 저장 (long format)."""
+        """종합된 투자경고 후보 목록과 시세 맵핑 딕셔너리를 Long Format CSV로 별도 기록합니다.
+
+        Args:
+            year (int): 출력 파일명에 명시할 연도 숫자.
+            filtered (list[InvestmentWarningStock]): 검증 과정을 통과한 도메인 인스턴스 배열.
+            daily_prices_by_code (dict[str, list[DailyPriceData]]): 종목 코드별 주가 리스트 모음.
+        """
         records = []
         for stock_info in filtered:
             code = stock_info.code
@@ -101,7 +119,15 @@ class WarningCollectionService:
         self.storage.save_dataframe_csv(df, csv_path)
 
     def collect_year(self, year: int, include_active: bool = False) -> bool:
-        """단일 연도 투자경고종목 전체 백필 처리"""
+        """지정한 연도 전체를 범위로 한 번에 종목을 탐색하고 시세를 수집·저장하는 백필 파이프라인.
+
+        Args:
+            year (int): 기준 연도 4자리 (예: 2025).
+            include_active (bool): True일 시 아직 투자경고 해제일이 없는 진행중인 목록도 무조건 포괄.
+
+        Returns:
+            bool: 파이프라인이 중도 파기되지 않고 정상 저장/출력 이행 시 True 리턴.
+        """
         start_date = f"{year}-01-01"
         end_date = f"{year}-12-31"
 
@@ -176,7 +202,14 @@ class WarningCollectionService:
     # 증분 수집 (collect_today) 헬퍼
     # ─────────────────────────────────────────────────────────────────────────
     def _load_existing_csv(self, csv_path: str) -> pd.DataFrame:
-        """기존 CSV 로드. 없으면 빈 DataFrame 반환."""
+        """이전에 저장된 증분 관리용 CSV 파일을 읽어와 파싱 규칙(문자열형 보장)을 적용합니다.
+
+        Args:
+            csv_path (str): 읽어올 기존 CSV의 전체 경로.
+
+        Returns:
+            pd.DataFrame: 확보된 데이터 프레임, 경로 없음/로딩 오류 시 빈 프레임 반환.
+        """
         if not self.storage.path_exists(csv_path):
             return pd.DataFrame()
         try:
@@ -197,7 +230,17 @@ class WarningCollectionService:
         end_date: str,
         include_active: bool,
     ) -> list:
-        """KRX 목록을 프로덕션 기준으로 필터링."""
+        """스크랩한 원본 목록을 대상으로 사내 프로덕션 정책(코넥스 제한방어, 최대 일수, 잔존 여부)을 반영해 여과합니다.
+
+        Args:
+            stock_list (list[InvestmentWarningStock]): 스크래퍼로부터 넘어온 가공 전 도메인 콜렉션.
+            query_start (str): 지정일 검사 하한 기준 문자열 ('YYYY-MM-DD').
+            end_date (str): 지정일 검사 상한 기준 문자열 ('YYYY-MM-DD').
+            include_active (bool): 해제일 미정인 현재 경고 종목 포함 여부 플래그.
+
+        Returns:
+            list[InvestmentWarningStock]: 유효 조건을 충족하는 원소들로만 구성된 정리 목록.
+        """
         start_dt = pd.to_datetime(query_start)
         end_dt = pd.to_datetime(end_date)
 
@@ -226,7 +269,18 @@ class WarningCollectionService:
         close: int,
         change_rate: float,
     ) -> dict:
-        """CSV 행 딕셔너리 생성 헬퍼."""
+        """도메인 데이터 속성과 시장 수치를 결합하여 단일 CSV/Parquet 롱폼 행을 딕셔너리로 구축합니다.
+
+        Args:
+            year (int): 처리 소속 연도.
+            stock_info (InvestmentWarningStock): 대상 종목 메타 객체.
+            date_str (str): 시세 체결 영업 일자.
+            close (int): 해당일 종가.
+            change_rate (float): 전일 대비 등락률 (퍼센트율).
+
+        Returns:
+            dict: 직렬화가 준비된 평면화 딕셔너리 구조체.
+        """
         return {
             "year": year,
             "code": stock_info.code,
@@ -245,7 +299,16 @@ class WarningCollectionService:
         all_filtered: list,
         logger: logging.Logger,
     ) -> None:
-        """KRX 최신 release_date를 현재·이전 연도 CSV에 원자적으로 동기화합니다."""
+        """이전 수집분 중 아직 '진행중'이었던 종목에 대해 KRX 최신 해제일(release_date)이 감지되면 원자적으로 동기화 갱신합니다.
+
+        올해와 전년도 분의 CSV 파일을 대상으로 확인 및 수정을 일괄 시도합니다.
+        단, Parquet 쪽의 경우 append 과정 내부의 중복 제거 키 우선순위에 의해 간접 적용됩니다.
+
+        Args:
+            year (int): 탐색 시점 기준 대상 연도.
+            all_filtered (list[InvestmentWarningStock]): 현재 KRX에서 응답한 실시간 메타 배열.
+            logger (logging.Logger): 변경 내역 트래킹에 사용될 로거.
+        """
         if not all_filtered:
             return
 
@@ -287,10 +350,18 @@ class WarningCollectionService:
     # 증분 수집 메인 로직
     # ─────────────────────────────────────────────────────────────────────────
     def collect_today(self, end_date: str, days: int = 1, include_active: bool = False) -> bool:
-        """
-        진짜 증분 수집 + release_date 동기화.
-        - 기존 종목 시세 추가, 신규 종목 전체 수집
-        - Parquet/CSV 백업 후 Excel 재생성 과정 파이프라인
+        """가장 최신 영업일(들)의 델타 파편분만 증분(Incremental) 수집하고 분석 리포트를 갱신합니다.
+
+        진행중이던 기존 종목의 연장 시세를 우선 수집하고 추가로 모니터링 포착된 신규 지정 종목에 대해
+        전체 기간 주가를 소급 수집하는 과정을 조율합니다. 결과물로 파켓 백업 및 엑셀 재합성을 유도합니다.
+
+        Args:
+            end_date (str): 증분 체크 및 KRX 공시 스크랩 대상 범위 끝일('YYYY-MM-DD').
+            days (int): 오늘부터 N 영업일을 거슬러 모아 수집할 일수. 기본 1일치.
+            include_active (bool): 해제일이 없는 갓 지정된/진행중인 종목의 취급 여부.
+
+        Returns:
+            bool: 엑셀 생성까지 완전 무결하게 완료된 경우 True. 작업 실패, 갱신점 부재 시 False 등.
         """
         logger = setup_logging(end_date)
         year = int(end_date[:4])
@@ -309,7 +380,9 @@ class WarningCollectionService:
 
         query_start = f"{year - 1}-01-01" if cross_year_unsettled else year_start
         if cross_year_unsettled:
-            logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장")
+            logger.info(
+                f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date}) ← {year - 1}년 미해제 종목 감지, 범위 확장"
+            )
         else:
             logger.info(f"[1/6] KRX KIND 목록 조회 ({query_start} ~ {end_date})...")
 
@@ -470,7 +543,7 @@ class WarningCollectionService:
 
 
 class ReportGenerationService:
-    """Parquet 저장소 데이터를 읽어 Excel 리포트로 변환·저장하는 서비스"""
+    """백업된 Parquet 바이너리 블록 저장소 원본을 읽어 서식적 엑셀 문서를 합성하고 발행/배포하는 서비스."""
 
     def __init__(
         self,
@@ -479,15 +552,30 @@ class ReportGenerationService:
         output_dir: str = "output",
         trading_days_after_release: int = 3,
     ):
+        """ReportGenerationService 초기화.
+
+        Args:
+            repository (WarningStockRepository): 데이터 원천이 담겨 있는 레파지토리 규격.
+            storage (StoragePort): 산출물(리포트)를 기록 저장할 I/O 공간 어댑터.
+            output_dir (str): 파일들의 종착지 폴더.
+            trading_days_after_release (int): 워닝 일수 차트 생성용 시트 최대 영업 컬럼. (기본 3)
+        """
         self.repository = repository
         self.storage = storage
         self.output_dir = output_dir
-        self.excel_exporter = WarningExcelExporter(
-            trading_days_after_release=trading_days_after_release
-        )
+        self.excel_exporter = WarningExcelExporter(trading_days_after_release=trading_days_after_release)
 
     def generate_excel_report(self, year: int) -> bool:
-        """지정 연도의 저장된 Parquet 데이터를 기반으로 엑셀 파일 재생성"""
+        """지정한 연착 연도의 파켓 복합 뷰어를 호출하여 .xlsx 포맷 리포트를 강제 단독 재생산합니다.
+
+        과거 연도 서식이나 누락 복구시 유용합니다.
+
+        Args:
+            year (int): 대상 파일 추출 연도(예시: 2025).
+
+        Returns:
+            bool: 성공적 파싱과 서식 기입, 저장이 성사 되었을 경우 True 반환.
+        """
         print(f"\n[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
 
         try:

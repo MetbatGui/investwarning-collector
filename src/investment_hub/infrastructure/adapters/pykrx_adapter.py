@@ -1,8 +1,8 @@
-"""
-PyKRX 어댑터: KRX 시장 데이터를 가져오는 어댑터
-하이브리드 캐싱 전략:
+"""PyKRX 어댑터 모듈: pykrx 라이브러리를 통해 한국거래소(KRX) 시장 데이터를 수집합니다.
+
+로컬 파일시스템(JSON)을 활용한 하이브리드 캐싱 전략을 구현하여 API 호출비용을 낮춥니다:
 1. 날짜별 종목 리스트 캐싱
-2. 종목별 OHLCV 데이터 캐싱
+2. 종목별 OHLCV(시가/고가/저가/종가/거래량) 데이터 캐싱
 """
 
 import json
@@ -14,7 +14,10 @@ from pykrx import stock
 
 
 class PyKRXAdapter:
-    """PyKRX API를 사용하여 시장 데이터를 가져오는 어댑터"""
+    """pykrx 오픈소스 API를 래핑하여 주식 시장 데이터를 가져오는 외부 어댑터.
+
+    내부적으로 캐시 디렉토리를 운용하여 동일한 일자/종목에 대한 반복적인 HTTP 호출을 방지합니다.
+    """
 
     def __init__(self, cache_dir: str = "cache/pykrx"):
         self.cache_dir = Path(cache_dir)
@@ -29,16 +32,15 @@ class PyKRXAdapter:
         self.market_daily_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def get_ticker_list(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> list[str]:
-        """
-        특정 날짜의 종목 리스트를 가져옵니다.
+        """지정된 날짜에 상장된 종목들의 티커(종목코드) 목록을 가져옵니다.
 
         Args:
-            date: 조회 날짜
-            market: 시장 구분 ("KOSPI", "KOSDAQ", "KONEX", "ALL")
-            use_cache: 캐시 사용 여부
+            date (datetime): 상장 종목을 조회할 기준 날짜.
+            market (str): 조회 대상 시장 구분. 기본값 "ALL". ("KOSPI", "KOSDAQ", "KONEX", "ALL" 중 택 1)
+            use_cache (bool): 로컬 디스크 캐시 사용 여부.
 
         Returns:
-            종목코드 리스트
+            list[str]: 수집된 6자리 종목코드 문자열 원소들의 목록. 에러 발생 시 빈 리스트 반환.
         """
         date_str = date.strftime("%Y%m%d")
         cache_file = self.ticker_cache_dir / f"{date_str}_{market}.json"
@@ -87,16 +89,15 @@ class PyKRXAdapter:
             return []
 
     def get_ticker_name_mapping(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> dict[str, str]:
-        """
-        특정 날짜의 종목명→종목코드 매핑 딕셔너리를 가져옵니다.
+        """특정 영업일에 유효한 종목명 → 종목코드(티커) 매핑 딕셔너리를 생성하거나 가져옵니다.
 
         Args:
-            date: 조회 날짜
-            market: 시장 구분 ("KOSPI", "KOSDAQ", "KONEX", "ALL")
-            use_cache: 캐시 사용 여부
+            date (datetime): 조회 기준 날짜.
+            market (str): 시장 구분. 기본값 "ALL". ("KOSPI", "KOSDAQ", "KONEX", "ALL")
+            use_cache (bool): 맵핑 결과 캐시 사용 여부.
 
         Returns:
-            종목명→종목코드 매핑 딕셔너리
+            dict[str, str]: "삼성전자" -> "005930" 형태의 데이터를 가지는 딕셔너리.
         """
         date_str = date.strftime("%Y%m%d")
         cache_file = self.mapping_cache_dir / f"{date_str}_{market}.json"
@@ -150,19 +151,19 @@ class PyKRXAdapter:
         use_cache: bool = True,
         ticker_name: str | None = None,
     ) -> pd.DataFrame:
-        """
-        특정 종목의 OHLCV 데이터를 가져옵니다.
+        """단일 종목에 대한 특정 기간 동안의 OHLCV(시고저종, 거래량) 일별 데이터를 조회합니다.
 
         Args:
-            ticker: 종목코드
-            start_date: 시작 날짜
-            end_date: 종료 날짜
-            use_cache: 캐시 사용 여부
-            ticker_name: 종목명 (제공 시 파일명에 사용)
+            ticker (str): 조회할 종목코드.
+            start_date (datetime): 조회 시작일.
+            end_date (datetime): 조회 종료일.
+            use_cache (bool): 데이터 캐싱 기능 사용 여부.
+            ticker_name (str | None): 캐시 파일명 작성을 위해 사용될 종목명. (생략 시 API로 조회됨)
 
         Returns:
-            DataFrame with columns: [시가, 고가, 저가, 종가, 거래량]
-            index: 날짜
+            pd.DataFrame: 생성된 날짜가 인덱스에 포함된 pandas DataFrame.
+                컬럼 구성: [시가, 고가, 저가, 종가, 거래량]
+                조회 실패나 기간 내 데이터가 없는 경우 빈 DataFrame 반환.
         """
         start_str = start_date.strftime("%Y%m%d")
         end_str = end_date.strftime("%Y%m%d")
@@ -237,15 +238,16 @@ class PyKRXAdapter:
             return pd.DataFrame()
 
     def get_trading_days(self, start_date: datetime, end_date: datetime) -> list[datetime]:
-        """
-        특정 기간 내의 실제 거래일(영업일) 목록을 가져옵니다.
+        """해당 기간 내 증권시장이 실제로 열린 영업일(개장일) 목록을 가져옵니다.
+
+        내부적으로 휴장이 드문 대표 종목(삼성전자)의 주가 기록이 위치한 일자 데이터를 역산하여 판단합니다.
 
         Args:
-            start_date: 시작 날짜
-            end_date: 종료 날짜
+            start_date (datetime): 거래일 탐색 기간 시작일.
+            end_date (datetime): 거래일 탐색 기간 종료일.
 
         Returns:
-            실제 거래일 datetime 리스트
+            list[datetime]: 시작일과 종료일 사이에 속하는 실제 영업일들의 리스트.
         """
         start_str = start_date.strftime("%Y%m%d")
         end_str = end_date.strftime("%Y%m%d")
@@ -259,16 +261,18 @@ class PyKRXAdapter:
             return []
 
     def get_daily_market_ohlcv(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> pd.DataFrame:
-        """
-        특정 날짜의 전 종목 OHLCV 데이터를 가져옵니다.
+        """지정된 단일 날짜에 대해 해당 시장 내 상장된 모든 종목의 OHLCV 단면 데이터를 조회합니다.
 
         Args:
-            date: 조회 날짜
-            market: 시장 구분 ("KOSPI", "KOSDAQ", "KONEX", "ALL")
-            use_cache: 캐시 사용 여부
+            date (datetime): 시장 전체 주가를 조회할 영업일 시점.
+            market (str): 조회할 시장 구분 (예: KOSPI, KOSDAQ).
+            use_cache (bool): 디스크 데이터 캐시 사용 여부.
 
         Returns:
-            DataFrame with index(ticker), columns[시가, 고가, 저가, 종가, 거래량, 등락률 ...]
+            pd.DataFrame:
+                인덱스: 종목코드 (티커/ticker)
+                컬럼: [시가, 고가, 저가, 종가, 거래량, 등락률 ...]
+                만약 해당 일자가 휴장일이거나 데이터가 유효하지 않으면 빈 DataFrame이 반환됩니다.
         """
         date_str = date.strftime("%Y%m%d")
         cache_file = self.market_daily_cache_dir / f"{date_str}_{market}.json"

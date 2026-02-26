@@ -8,10 +8,10 @@ from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 
 
 class WarningExcelExporter:
-    """투자경고종목 분석 결과를 Excel(Workbook)로 시각화하는 클래스.
+    """수집 완료된 투자경고종목 데이터와 일별 시세를 엑셀 워크북 형태로 변환하는 시각화 도구.
 
-    저장소(Port/Adapter)에 의존하지 않고, 순수 데이터(Entity)를
-    openpyxl.Workbook으로 변환하는 역할만 수행합니다.
+    저장소(Port/Adapter)에 의존하지 않고, 순수 데이터(Entity) 기반으로 openpyxl 구조체를 반환하는
+    단일 책임 원칙을 준수합니다. 서식(색상, 정렬, 틀 고정) 렌더링을 내장하고 있습니다.
     """
 
     def __init__(self, trading_days_after_release: int = 3):
@@ -20,15 +20,15 @@ class WarningExcelExporter:
     def export(
         self, year: int, stocks: list[InvestmentWarningStock], prices_by_code: dict[str, list[DailyPriceData]]
     ) -> openpyxl.Workbook:
-        """종목장 및 시세를 기반으로 분석 Excel 리포트 생성.
+        """연간 시세 데이터와 종목 목록을 결합하여 분석결과가 담긴 엑셀 Workbook 인스턴스를 생성합니다.
 
         Args:
-            year: 리포트 대상 연도
-            stocks: 투자경고 종목 목록
-            prices_by_code: 종목코드 → 일별 시세 목록 매핑
+            year (int): 리포트가 생성되는 기준 연도 (예: 2025). 시트명에 반영됩니다.
+            stocks (list[InvestmentWarningStock]): 추출 대상이 되는 투자경고 종목들의 리스트.
+            prices_by_code (dict[str, list[DailyPriceData]]): 종목코드 키와 일자별 가격 데이터 값의 매핑.
 
         Returns:
-            서식이 적용된 openpyxl.Workbook 객체
+            openpyxl.Workbook: 스타일 서식(배경, 글꼴 등)과 데이터가 전부 기입된 엑셀 내부 객체.
         """
         rows_data, max_days = self._build_rows(stocks, prices_by_code)
 
@@ -113,7 +113,17 @@ class WarningExcelExporter:
     def _build_rows(
         self, filtered: list[InvestmentWarningStock], daily_prices_by_code: dict[str, list[DailyPriceData]]
     ) -> tuple[list[dict], int]:
-        """Excel/CSV 공통 rows_data 생성. Returns (rows_data, max_days)"""
+        """도메인 모델들로부터 엑셀 각 행(Row)에 주입될 딕셔너리 데이터와 최장 추적일수를 구성합니다.
+
+        Args:
+            filtered (list[InvestmentWarningStock]): 필터링된 투자경고 후보 종목 리스트.
+            daily_prices_by_code (dict[str, list[DailyPriceData]]): 종목코드 매핑 주가 데이터.
+
+        Returns:
+            tuple[list[dict], int]:
+                - list[dict]: 지정일자, 해제일자, 유효 일별 가격등이 가공된 행 데이터 목록.
+                - int: 데이터 중 해제일 후 추적된 최장 D+n 영업일 숫자 (`max_days`).
+        """
         max_days = 0
         rows_data = []
 
@@ -199,7 +209,16 @@ class WarningExcelExporter:
         return rows_data, max_days
 
     def _calc_returns(self, row_data: dict) -> tuple[float | None, float | None]:
-        """해제전/해제직후 등락률 계산."""
+        """해당 종목의 해제 전일 및 해제 직후 구간 등락률을 수식 계산합니다.
+
+        Args:
+            row_data (dict): `_build_rows` 에서 반환된 단일 종목 행위 데이터 매핑.
+
+        Returns:
+            tuple[float | None, float | None]:
+                - 해제 전 등락률 (%)
+                - 해제 직후 등락률 (%), 데이터가 없거나 유효하지 않으면 None.
+        """
         pre_return = None
         post_return = None
         release_day = row_data["release_trading_day"]
