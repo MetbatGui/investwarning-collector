@@ -9,8 +9,12 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from dotenv import load_dotenv
 
 from investment_hub.core.ports.storage_port import StoragePort
+
+# 환경 변수 로드
+load_dotenv()
 
 
 class GoogleDriveAdapter(StoragePort):
@@ -34,12 +38,8 @@ class GoogleDriveAdapter(StoragePort):
         Args:
             token_file (str): OAuth 2.0 사용자 토큰 파일 상대/절대 경로.
             root_folder_name (str): 구글 드라이브 최상단 기준 대상 폴더명. 기본 "KRX_Auto_Crawling_Data"
-            root_folder_id (str | None): 폴더명 대신 직접 ID로 맵핑해야 할 때 사용.
+            root_folder_id (str | None): 폴더명 대신 직접 ID로 맵핑해야 할 때 사용. 부재 시 환경 변수 GOOGLE_DRIVE_ROOT_FOLDER_ID 확인.
             client_secret_file (str | None): 자격 증명 갱신에 사용될 구글 클라우드 secret 파일의 위치.
-
-        Raises:
-            ValueError: `token_file` 값이 전액 부재일 때.
-            FileNotFoundError: `token_file` 에 명시된 물리적 토큰 json 이 발견되지 않을 경우.
         """
         self.token_file = token_file
         self.client_secret_file = client_secret_file
@@ -52,9 +52,14 @@ class GoogleDriveAdapter(StoragePort):
 
         self.drive_service = self._authenticate()
 
-        if root_folder_id:
-            self.root_folder_id = root_folder_id
-            print(f"[GoogleDrive] 초기화 완료 (지정된 Root ID: {self.root_folder_id})")
+        # 1. 인자로 넘어온 ID 확인
+        # 2. 없으면 환경 변수 GOOGLE_DRIVE_ROOT_FOLDER_ID 확인
+        # 3. 둘 다 없으면 이름(root_folder_name)으로 조회/생성
+        effective_root_id = root_folder_id or os.getenv("GOOGLE_DRIVE_ROOT_FOLDER_ID")
+
+        if effective_root_id:
+            self.root_folder_id = effective_root_id
+            print(f"[GoogleDrive] 초기화 완료 (Root ID: {self.root_folder_id})")
         else:
             self.root_folder_id = self._get_or_create_folder(root_folder_name)
             print(f"[GoogleDrive] 초기화 완료 (Root: {root_folder_name}, ID: {self.root_folder_id})")

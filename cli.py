@@ -31,10 +31,12 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryA
         token_file = getattr(args, "token_file", "secrets/token.json")
         client_secret = getattr(args, "client_secret", "secrets/client_secret.json")
         drive_folder = getattr(args, "drive_folder", "KRX_Auto_Crawling_Data")
+        drive_folder_id = getattr(args, "drive_folder_id", None)
         print(f"[설정] Google Drive 저장소 사용 (Token: {token_file})")
         storage: StoragePort = GoogleDriveAdapter(
             token_file=token_file,
             root_folder_name=drive_folder,
+            root_folder_id=drive_folder_id,
             client_secret_file=client_secret,
         )
     else:
@@ -168,7 +170,8 @@ def _build_storage_parser() -> argparse.ArgumentParser:
     p.add_argument("--storage", choices=["local", "drive"], default="local", help="저장 방식 선택")
     p.add_argument("--token-file", dest="token_file", default="secrets/token.json", help="Google Drive 토큰 경로")
     p.add_argument("--client-secret", dest="client_secret", default="secrets/client_secret.json", help="OAuth 비밀파일 경로")
-    p.add_argument("--drive-folder", dest="drive_folder", default="KRX_Auto_Crawling_Data", help="Drive 루트 폴더")
+    p.add_argument("--drive-folder", dest="drive_folder", default="KRX_Auto_Crawling_Data", help="Drive 루트 폴더명")
+    p.add_argument("--drive-folder-id", dest="drive_folder_id", help="Drive 루트 폴더 ID (환경 변수보다 우선)")
     return p
 
 def _add_today_cmd(subparsers, common):
