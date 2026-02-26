@@ -175,7 +175,8 @@ def _add_today_cmd(subparsers, common):
     p = subparsers.add_parser("today", parents=[common], help="최근 N일 수집", description="오늘 기준 최근 N일 수집")
     p.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"), help="마지막 날짜 (YYYY-MM-DD)")
     p.add_argument("--days", type=int, default=1, help="수집 일수")
-    p.add_argument("--include-active", dest="include_active", action="store_true", help="진행중 포함")
+    p.add_argument("--exclude-active", dest="include_active", action="store_false", help="진행중 제외")
+    p.set_defaults(include_active=True)
     p.set_defaults(func=cmd_today)
 
 def _add_year_cmd(subparsers, common):
@@ -184,7 +185,8 @@ def _add_year_cmd(subparsers, common):
     g.add_argument("--year", type=int, help="특정 연도")
     g.add_argument("--start", type=int, default=2020, help="시작 연도")
     p.add_argument("--end", type=int, default=datetime.now().year, help="종료 연도")
-    p.add_argument("--include-active", dest="include_active", action="store_true", help="진행중 포함")
+    p.add_argument("--exclude-active", dest="include_active", action="store_false", help="진행중 제외")
+    p.set_defaults(include_active=True)
     p.set_defaults(func=cmd_year)
 
 def _add_export_cmd(subparsers, common):

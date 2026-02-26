@@ -97,6 +97,7 @@ class GoogleDriveAdapter(StoragePort):
 
     def _get_file_id(self, path: str) -> str | None:
         """경로(상대 경로)에 해당하는 파일/폴더의 ID를 찾습니다."""
+        path = path.replace("\\", "/")
         parts = path.strip("/").split("/")
         current_parent_id = self.root_folder_id
 
@@ -114,6 +115,7 @@ class GoogleDriveAdapter(StoragePort):
 
     def _ensure_path_directories(self, path: str) -> str:
         """파일 경로의 상위 디렉토리들을 생성하고 마지막 부모 폴더 ID를 반환합니다."""
+        path = path.replace("\\", "/")
         parts = path.strip("/").split("/")
         dir_parts = parts[:-1]
 
@@ -224,6 +226,7 @@ class GoogleDriveAdapter(StoragePort):
 
     def _upload_file(self, data: io.BytesIO, path: str, mime_type: str):
         """파일 업로드 (생성 또는 업데이트)."""
+        path = path.replace("\\", "/")
         filename = os.path.basename(path)
         parent_id = self._ensure_path_directories(path)
 

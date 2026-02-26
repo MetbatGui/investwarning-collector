@@ -115,7 +115,7 @@ class WarningCollectionService:
                 records.append(self._make_row(year, s, dp.date.strftime("%Y-%m-%d"), int(dp.close), dp.change_rate))
         return records
 
-    def collect_year(self, year: int, include_active: bool = False) -> bool:
+    def collect_year(self, year: int, include_active: bool = True) -> bool:
         """지정된 연도의 투자경고종목 데이터를 전체 백필(Backfill) 방식으로 수집합니다."""
         print(f"\n[{year}년 전체 백필 시작]")
         
@@ -527,7 +527,7 @@ class WarningCollectionService:
                 prc_map.setdefault(r["code"], []).append(dp)
         return stk_map, prc_map
 
-    def collect_today(self, end_date: str, days: int = 1, include_active: bool = False) -> bool:
+    def collect_today(self, end_date: str, days: int = 1, include_active: bool = True) -> bool:
         """가장 최신 영업일(들)의 델타 파편분만 증분(Incremental) 수집하고 분석 리포트를 갱신합니다."""
         logger, year, end_dt = setup_logging(end_date), int(end_date[:4]), datetime.strptime(end_date, "%Y-%m-%d")
         
