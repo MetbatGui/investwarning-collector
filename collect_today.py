@@ -29,7 +29,6 @@ from collect_yearly_warnings import (  # noqa: E402
     OUTPUT_DIR,
     PARQUET_DIR,
     TRADING_DAYS_AFTER_RELEASE,
-    _save_excel,
     get_repository,
     get_storage,
 )
@@ -38,6 +37,7 @@ from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock 
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter  # noqa: E402
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch  # noqa: E402
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks  # noqa: E402
+from investment_hub.visualization.excel_exporter import WarningExcelExporter  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 로깅 설정
@@ -449,7 +449,10 @@ def collect_today(end_date: str, days: int = 1, include_active: bool = False) ->
         # Excel 재생성용 최신 Parquet 로드
         final_stocks, final_prices = repo.load_year(year)
 
-    _save_excel(year, final_stocks, final_prices, storage)
+    exporter = WarningExcelExporter(trading_days_after_release=TRADING_DAYS_AFTER_RELEASE)
+    wb = exporter.export(year, final_stocks, final_prices)
+    xlsx_path = os.path.join(OUTPUT_DIR, f"투자경고종목분석({year}년).xlsx")
+    storage.save_workbook(wb, xlsx_path)
 
     logger.info(
         f"[완료] 신규 {len(new_stocks)}종목 전체 수집 / 기존 {len(known_stocks)}종목 × {len(missing_dates)}일 시세 추가"

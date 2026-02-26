@@ -99,6 +99,38 @@ def cmd_year(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_excel(args: argparse.Namespace) -> int:
+    """Parquet 파일에서 Excel 리포트를 재생성합니다."""
+    _setup_storage(args)
+
+    import os
+
+    from collect_yearly_warnings import OUTPUT_DIR, TRADING_DAYS_AFTER_RELEASE, get_repository, get_storage
+    from investment_hub.visualization.excel_exporter import WarningExcelExporter
+
+    repo = get_repository()
+    storage = get_storage()
+    exporter = WarningExcelExporter(trading_days_after_release=TRADING_DAYS_AFTER_RELEASE)
+
+    year = args.year
+    print(f"\n[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
+
+    try:
+        stocks, prices = repo.load_year(year)
+        if not stocks:
+            print(f"  [경고] {year}년 Parquet 데이터가 비어있거나 존재하지 않습니다.")
+            return 1
+
+        wb = exporter.export(year, stocks, prices)
+        xlsx_path = os.path.join(OUTPUT_DIR, f"투자경고종목분석({year}년).xlsx")
+        storage.save_workbook(wb, xlsx_path)
+        print(f"  [완료] {xlsx_path} 재생성 완료")
+        return 0
+    except Exception as e:
+        print(f"  [오류] 엑셀 재생성 중 오류 발생: {e}")
+        return 1
+
+
 def cmd_scheduler(args: argparse.Namespace) -> int:
     """Windows 작업 스케줄러 관리"""
     task_name = "InvestWarningCollector"
@@ -241,6 +273,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="해제일 없는 진행 중 종목도 포함",
     )
     p_year.set_defaults(func=cmd_year)
+
+    # ── export-excel ──────────────────────────────────────────────────────────
+    p_export = subparsers.add_parser(
+        "export-excel",
+        parents=[storage_parser],
+        help="Excel 리포트 재생성",
+        description="Parquet 데이터에서 Excel 리포트를 다시 생성합니다.",
+    )
+    p_export.add_argument("--year", type=int, required=True, help="재생성할 연도")
+    p_export.set_defaults(func=cmd_export_excel)
 
     # ── scheduler ─────────────────────────────────────────────────────────────
     p_sched = subparsers.add_parser(
