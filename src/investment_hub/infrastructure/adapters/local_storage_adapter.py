@@ -58,6 +58,22 @@ class LocalStorageAdapter(StoragePort):
             print(f"[LocalStorage] [ERROR] CSV 저장 실패 ({path}): {e}")
             return False
 
+    def save_parquet(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
+        """DataFrame을 Parquet 파일로 로컬에 원자적으로 저장합니다."""
+        full_path = self._full_path(path)
+        self.ensure_directory(str(full_path.parent))
+
+        tmp_path = full_path.with_suffix(".tmp.parquet")
+        try:
+            df.to_parquet(str(tmp_path), engine="pyarrow", **kwargs)
+            tmp_path.replace(full_path)
+            return True
+        except Exception as e:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            print(f"[LocalStorage] [ERROR] Parquet 저장 실패 ({path}): {e}")
+            return False
+
     def save_workbook(self, book: openpyxl.Workbook, path: str) -> bool:
         """Workbook 객체를 로컬에 원자적으로 저장합니다."""
         full_path = self._full_path(path)
@@ -107,6 +123,18 @@ class LocalStorageAdapter(StoragePort):
                 return pd.read_excel(str(full_path), sheet_name=target_sheet, **kwargs)
         except Exception as e:
             print(f"[LocalStorage] [ERROR] DataFrame 로드 실패 ({path}): {e}")
+            return pd.DataFrame()
+
+    def load_parquet(self, path: str, **kwargs) -> pd.DataFrame:
+        """로컬에서 Parquet 파일 로드"""
+        full_path = self._full_path(path)
+        if not full_path.exists():
+            return pd.DataFrame()
+
+        try:
+            return pd.read_parquet(str(full_path), engine="pyarrow", **kwargs)
+        except Exception as e:
+            print(f"[LocalStorage] [ERROR] Parquet 로드 실패 ({path}): {e}")
             return pd.DataFrame()
 
     def path_exists(self, path: str) -> bool:

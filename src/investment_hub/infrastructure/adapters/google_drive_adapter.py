@@ -147,6 +147,21 @@ class GoogleDriveAdapter(StoragePort):
             print(f"[GoogleDrive] [Error] CSV 업로드 실패 ({path}): {e}")
             return False
 
+    def save_parquet(self, df: pd.DataFrame, path: str, **kwargs) -> bool:
+        """DataFrame을 Parquet 파일로 저장 (업로드)."""
+        try:
+            output = io.BytesIO()
+            df.to_parquet(output, engine="pyarrow", **kwargs)
+            output.seek(0)
+
+            # parquet의 공식 mime type이 없을 경우 기본 바이너리로 처리
+            self._upload_file(output, path, "application/octet-stream")
+            print(f"[GoogleDrive] [OK] Parquet 업로드: {path}")
+            return True
+        except Exception as e:
+            print(f"[GoogleDrive] [Error] Parquet 업로드 실패 ({path}): {e}")
+            return False
+
     def save_workbook(self, book: openpyxl.Workbook, path: str) -> bool:
         """openpyxl Workbook 저장 (업로드)."""
         try:
@@ -241,6 +256,26 @@ class GoogleDriveAdapter(StoragePort):
                 return pd.read_excel(fh, sheet_name=target_sheet, **kwargs)
         except Exception as e:
             print(f"[GoogleDrive] [Error] DataFrame 로드 실패 ({path}): {e}")
+            return pd.DataFrame()
+
+    def load_parquet(self, path: str, **kwargs) -> pd.DataFrame:
+        """Parquet 파일에서 DataFrame을 로드 (다운로드)."""
+        try:
+            file_id = self._get_file_id(path)
+            if not file_id:
+                return pd.DataFrame()
+
+            request = self.drive_service.files().get_media(fileId=file_id)
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while done is False:
+                status, done = downloader.next_chunk()
+
+            fh.seek(0)
+            return pd.read_parquet(fh, engine="pyarrow", **kwargs)
+        except Exception as e:
+            print(f"[GoogleDrive] [Error] Parquet 로드 실패 ({path}): {e}")
             return pd.DataFrame()
 
     def get_file(self, path: str) -> bytes | None:

@@ -145,9 +145,7 @@ class ParquetRepositoryAdapter(WarningStockRepository):
             combined = pd.concat([new_df, existing_df], ignore_index=True)
             dedup_keys = ["code", "designation_date", "date"]
             combined = combined.drop_duplicates(subset=dedup_keys, keep="first")
-            combined = combined.sort_values(
-                ["designation_date", "code", "date"]
-            ).reset_index(drop=True)
+            combined = combined.sort_values(["designation_date", "code", "date"]).reset_index(drop=True)
             self._write_parquet_atomic(year, combined)
         else:
             self._write_parquet_atomic(year, new_df)
@@ -283,9 +281,7 @@ class ParquetRepositoryAdapter(WarningStockRepository):
         stocks: list[InvestmentWarningStock] = []
         for _, row in meta.iterrows():
             release_raw = row["release_date"]
-            release_dt: datetime | None = (
-                None if pd.isna(release_raw) else pd.Timestamp(release_raw).to_pydatetime()
-            )
+            release_dt: datetime | None = None if pd.isna(release_raw) else pd.Timestamp(release_raw).to_pydatetime()
             stocks.append(
                 InvestmentWarningStock(
                     code=str(row["code"]),
