@@ -35,7 +35,7 @@ class PyKRXAdapter:
         """지정된 날짜에 상장된 종목들의 티커 목록을 가져옵니다."""
         d_str = date.strftime("%Y%m%d")
         cache_path = self.ticker_cache_dir / f"{d_str}_{market}.json"
-        
+
         if use_cache:
             cache = self._load_cache(cache_path, f"TICKER for {d_str}")
             if cache is not None: return cache
@@ -103,7 +103,7 @@ class PyKRXAdapter:
         """특정 영업일에 유효한 종목명 → 종목코드 매핑을 가져옵니다."""
         d_str = date.strftime("%Y%m%d")
         cache_path = self.mapping_cache_dir / f"{d_str}_{market}.json"
-        
+
         if use_cache:
             cache = self._load_cache(cache_path, f"MAPPING for {d_str}")
             if cache is not None: return cache
@@ -138,7 +138,7 @@ class PyKRXAdapter:
         s_str, e_str = start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
         t_name = ticker_name or self._lookup_ticker_name(ticker)
         cache_path = self.ohlcv_cache_dir / f"{t_name}_{s_str}_{e_str}.json"
-        
+
         if use_cache:
             cache = self._load_cache(cache_path, f"OHLCV for {t_name}")
             if cache is not None: return self._to_ohlcv_df(cache)
@@ -200,13 +200,13 @@ class PyKRXAdapter:
         """지정된 날짜의 시장 내 모든 종목 OHLCV 데이터를 조회합니다."""
         d_str = date.strftime("%Y%m%d")
         cache_path = self.market_daily_cache_dir / f"{d_str}_{market}.json"
-        
+
         if use_cache:
             cache = self._load_cache(cache_path, f"MARKET DAILY for {d_str}")
             if cache is not None: return self._to_market_df(cache)
 
         df = self._fetch_market_ohlcv(d_str, market)
-        if use_cache and not df.empty: self._save_cache(cache_path, self._from_market_df(df), f"MARKET DAILY")
+        if use_cache and not df.empty: self._save_cache(cache_path, self._from_market_df(df), "MARKET DAILY")
         return df
 
     def _to_market_df(self, data: list) -> pd.DataFrame:

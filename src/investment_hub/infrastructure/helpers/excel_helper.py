@@ -89,10 +89,10 @@ def save_investment_warning_excel(year: int, stocks: list, prices_by_code: dict,
     wb = Workbook()
     ws = wb.active
     ws.title = f"{year}년 투자경고 분석"
-    
+
     rows_data, max_days = _prepare_excel_rows(stocks, prices_by_code)
     base_headers = _write_excel_headers(ws, max_days)
     _write_excel_data_rows(ws, rows_data, max_days, len(base_headers))
     _finalize_excel_sheet(ws, len(base_headers))
-    
+
     storage.save_workbook(wb, os.path.join(output_dir, f"투자경고종목분석({year}년).xlsx"))

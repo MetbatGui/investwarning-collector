@@ -8,9 +8,7 @@ from investment_hub.domain.models import InvestmentWarningStock
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 
 
-def fetch_investment_warning_stocks(
-    start_date: str | None = None, end_date: str | None = None
-) -> list[InvestmentWarningStock]:
+def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:
     """KRX KIND 기업공시 채널에서 특정 기간 동안의 '투자경고종목' 지정 내역을 크롤링합니다.
 
     지정일, 해제일, 종목명 등의 메타데이터를 수집하며, 종목 코드는 PyKRXAdapter의
@@ -23,6 +21,23 @@ def fetch_investment_warning_stocks(
     Returns:
         list[InvestmentWarningStock]: 수집 정보가 매핑된 도메인 객체 리스트. 수집 실패 시 빈 리스트 반환.
     """
+    url = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
+    start, end = _get_default_dates(start_date, end_date)
+    mapping = _get_name_to_code_mapping(end)
+
+    try:
+        html = _fetch_html(url, _build_payload(start, end))
+        if not html:
+            return []
+
+        rows = _parse_table(html)
+        if not rows:
+            return []
+
+        return _process_rows(rows, mapping)
+    except Exception as e:
+        print(f"Exception during scraping: {e}")
+        return []
 def _get_default_dates(start_date: str | None, end_date: str | None) -> tuple[str, str]:
     end = end_date or datetime.now().strftime("%Y-%m-%d")
     start = start_date or (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
@@ -56,10 +71,13 @@ def _fetch_html(url: str, payload: dict) -> str | None:
     if resp.status_code != 200:
         print(f"Error: Status code {resp.status_code}")
         return None
-    try: return resp.content.decode("euc-kr")
+    try:
+        return resp.content.decode("euc-kr")
     except UnicodeDecodeError:
-        try: return resp.content.decode("cp949")
-        except UnicodeDecodeError: return resp.text
+        try:
+            return resp.content.decode("cp949")
+        except UnicodeDecodeError:
+            return resp.text
 
 def _parse_table(html: str) -> list | None:
     soup = BeautifulSoup(html, "html.parser")
@@ -82,9 +100,12 @@ def _extract_market(name_cell) -> str:
     return "Unknown"
 
 def _parse_date(date_str: str) -> datetime | None:
-    if not date_str or date_str == "-": return None
-    try: return datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError: return None
+    if not date_str or date_str == "-":
+        return None
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return None
 
 def _process_rows(rows: list, mapping: dict) -> list[InvestmentWarningStock]:
     """BS4로 파싱된 전체 행 집합을 순회하며 유효한 도메인 객체 리스트로 변환합니다.
@@ -99,7 +120,8 @@ def _process_rows(rows: list, mapping: dict) -> list[InvestmentWarningStock]:
     results = []
     for row in rows:
         stock = _parse_stock_from_row(row, mapping)
-        if stock: results.append(stock)
+        if stock:
+            results.append(stock)
     return results
 
 def _parse_stock_from_row(row, mapping: dict) -> InvestmentWarningStock | None:
@@ -113,39 +135,24 @@ def _parse_stock_from_row(row, mapping: dict) -> InvestmentWarningStock | None:
         InvestmentWarningStock | None: 추출 성공 시 객체, 데이터 부족 시 None.
     """
     cols = row.select("td")
-    if len(cols) < 5: return None
-    
+    if len(cols) < 5:
+        return None
+
     name = cols[1].text.strip()
     desig_dt = _parse_date(cols[3].text.strip())
-    if not desig_dt: return None
-    
+    if not desig_dt:
+        return None
+
     code = mapping.get(name)
     if not code:
         print(f"  Warning: Could not find code for '{name}'")
         return None
-        
+
     return InvestmentWarningStock(
-        code=code, name=name, market=_extract_market(cols[1]), 
+        code=code, name=name, market=_extract_market(cols[1]),
         designation_date=desig_dt, release_date=_parse_date(cols[4].text.strip())
     )
 
-def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:
-    """KRX KIND 기업공시 채널에서 특정 기간 동안의 '투자경고종목' 지정 내역을 크롤링합니다."""
-    url = "https://kind.krx.co.kr/investwarn/investattentwarnrisky.do"
-    start, end = _get_default_dates(start_date, end_date)
-    mapping = _get_name_to_code_mapping(end)
-    
-    try:
-        html = _fetch_html(url, _build_payload(start, end))
-        if not html: return []
-        
-        rows = _parse_table(html)
-        if not rows: return []
-        
-        return _process_rows(rows, mapping)
-    except Exception as e:
-        print(f"Exception during scraping: {e}")
-        return []
 
 
 if __name__ == "__main__":
