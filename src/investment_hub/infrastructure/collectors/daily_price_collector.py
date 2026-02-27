@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import TypedDict
 
 import pandas as pd
+
 from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 
@@ -19,11 +20,28 @@ class _StockPeriod(TypedDict):
 
 
 def _calc_period_for_stock(stock_info: InvestmentWarningStock, days_after: int) -> tuple[datetime, datetime]:
+    """개별 종목의 데이터 수집 시작일과 종료일을 계산합니다.
+
+    지정일 5일 전부터 계산하며, 종료일은 해제일 이후 지정된 영업일수 또는 현재 시점(장 마감 고려) 중 빠른 날짜로 설정합니다.
+
+    Args:
+        stock_info (InvestmentWarningStock): 대상 종목 정보.
+        days_after (int): 해제일 이후 추가 수집할 영업일수.
+
+    Returns:
+        tuple[datetime, datetime]: (시작일시, 종료일시).
+    """
     start = stock_info.designation_date - timedelta(days=5)
+
+    # KST 기준 오후 3시 30분 이전이면 오늘(당일)을 수집 대상에서 제외
+    now = datetime.now()
+    market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    max_collect_date = now if now >= market_close else now - timedelta(days=1)
+
     if stock_info.release_date is None:
-        end = datetime.now()
+        end = max_collect_date
     else:
-        end = min(stock_info.release_date + timedelta(days=days_after * 2 + 5), datetime.now())
+        end = min(stock_info.release_date + timedelta(days=days_after * 2 + 5), max_collect_date)
     return start, end
 
 def _build_stock_periods(warning_stocks: list, days_after: int) -> tuple[dict, datetime, datetime]:
@@ -32,7 +50,7 @@ def _build_stock_periods(warning_stocks: list, days_after: int) -> tuple[dict, d
     for s in warning_stocks:
         start, end = _calc_period_for_stock(s, days_after)
         min_date, max_date = min(min_date, start), max(max_date, end)
-        
+
         if s.code not in periods:
             periods[s.code] = {"start": start, "end": end, "min_designation": s.designation_date, "info": s}
         else:
@@ -62,13 +80,13 @@ def _extract_from_market(df_market: pd.DataFrame, codes: list[str], dt: datetime
             except Exception: pass
     return found
 
-def _fetch_prices(adapter: PyKRXAdapter, dates: list[datetime], periods: dict, use_cache: bool) -> dict:
-    result = {code: [] for code in periods}
+def _fetch_prices(adapter: PyKRXAdapter, dates: list[datetime], periods: dict, use_cache: bool) -> dict[str, list[DailyPriceData]]:
+    result: dict[str, list[DailyPriceData]] = {code: [] for code in periods}
     for i, dt in enumerate(dates, 1):
         if i % 10 == 0: print(f"  날짜 처리 중 {i}/{len(dates)}: {dt.strftime('%Y-%m-%d')}...")
         target_codes = [c for c, p in periods.items() if p["start"] <= dt <= p["end"]]
         if not target_codes: continue
-        
+
         df_market = adapter.get_daily_market_ohlcv(dt, market="ALL", use_cache=use_cache)
         if df_market.empty: continue
         for price_data in _extract_from_market(df_market, target_codes, dt, periods):
@@ -84,20 +102,31 @@ def _post_process(result: dict, periods: dict) -> dict:
     return result
 
 def collect_daily_prices_batch(warning_stocks: list[InvestmentWarningStock], trading_days_after_release: int = 3, use_cache: bool = True) -> dict[str, list[DailyPriceData]]:
-    """여러 투자경고 종목의 일별 가격 데이터를 배치로 수집합니다."""
+    """여러 투자경고 종목의 일별 가격 데이터를 배치로 수집합니다.
+
+    각 종목별로 필요한 날짜 범위를 합산하여 최소한의 API 호출로 전체 데이터를 수집하고 분류합니다.
+
+    Args:
+        warning_stocks (list[InvestmentWarningStock]): 수집 대상 종목 리스트.
+        trading_days_after_release (int): 해제일 기준 추가 수집 영업일수. 기본값 3.
+        use_cache (bool): 로컬 캐시(PyKRX) 사용 여부.
+
+    Returns:
+        dict[str, list[DailyPriceData]]: 종목코드별 일별 시세 데이터 리스트.
+    """
     if not warning_stocks: return {}
     print(f"  종목 수집 기간 계산 중 ({len(warning_stocks)}종목)...")
-    
+
     periods, min_dt, max_dt = _build_stock_periods(warning_stocks, trading_days_after_release)
     print(f"  수집 기간: {min_dt.strftime('%Y-%m-%d')} ~ {max_dt.strftime('%Y-%m-%d')}")
-    
+
     dates = _gen_business_dates(min_dt, max_dt)
     print(f"  목표 거래일: 약 {len(dates)}일")
-    
+
     result = _fetch_prices(PyKRXAdapter(), dates, periods, use_cache)
     print("  후처리 중 (정렬 및 필터링)...")
     result = _post_process(result, periods)
-    
+
     print(f"  완료: {len(result)}종목 처리됨")
     return result
 

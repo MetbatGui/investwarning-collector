@@ -5,11 +5,11 @@ import os
 
 import openpyxl
 import pandas as pd
+from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from dotenv import load_dotenv
 
 from investment_hub.core.ports.storage_port import StoragePort
 
@@ -64,8 +64,17 @@ class GoogleDriveAdapter(StoragePort):
             self.root_folder_id = self._get_or_create_folder(root_folder_name)
             print(f"[GoogleDrive] 초기화 완료 (Root: {root_folder_name}, ID: {self.root_folder_id})")
 
-    def _authenticate(self):
-        """Google Drive API 인증 (OAuth 2.0 Token)."""
+    def _authenticate(self) -> build:
+        """Google Drive API 인증을 수행하고 서비스 객체를 반환합니다.
+
+        OAuth 2.0 Credentials를 사용하며, 토큰 만료 시 자동으로 갱신을 시도합니다.
+
+        Returns:
+            googleapiclient.discovery.Resource: 인증된 Drive API 서비스 객체.
+
+        Raises:
+            RuntimeError: 인증 파일 부재 또는 네트워킹 오류로 인증 실패 시.
+        """
         try:
             creds = Credentials.from_authorized_user_file(self.token_file, self.SCOPES)
 
@@ -83,7 +92,15 @@ class GoogleDriveAdapter(StoragePort):
             raise RuntimeError(f"Google Drive 인증 실패: {e}") from e
 
     def _get_or_create_folder(self, folder_name: str, parent_id: str = "root") -> str:
-        """폴더를 찾거나 생성합니다."""
+        """지정된 부모 아래에서 폴더를 조회하거나, 없으면 새로 생성합니다.
+
+        Args:
+            folder_name (str): 찾거나 생성할 폴더명.
+            parent_id (str): 검색 기준이 될 부모 폴더 ID. 기본값 "root".
+
+        Returns:
+            str: 대상 폴더의 고유 ID.
+        """
         query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed = false"
         results = self.drive_service.files().list(q=query, fields="files(id, name)").execute()
         files = results.get("files", [])
@@ -97,13 +114,20 @@ class GoogleDriveAdapter(StoragePort):
                 "parents": [parent_id],
             }
             file = self.drive_service.files().create(body=file_metadata, fields="id").execute()
-            print(f"[GoogleDrive] 📁 폴더 생성: {folder_name} (ID: {file.get('id')})")
+            print(f"[GoogleDrive] [Folder] 폴더 생성: {folder_name} (ID: {file.get('id')})")
             return file.get("id")
 
     def _get_file_id(self, path: str) -> str | None:
-        """경로(상대 경로)에 해당하는 파일/폴더의 ID를 찾습니다."""
+        """슬래시(/)로 구분된 상대 경로를 따라 최종 대상(파일/폴더)의 ID를 조회합니다.
+
+        Args:
+            path (str): 루트 폴더 기준의 파일 또는 디렉토리 경로.
+
+        Returns:
+            str | None: 대상의 ID. 경로 중간에 요소가 없으면 None.
+        """
         path = path.replace("\\", "/")
-        parts = path.strip("/").split("/")
+        parts = [p for p in path.strip("/").split("/") if p]
         current_parent_id = self.root_folder_id
 
         for part in parts:
@@ -119,9 +143,22 @@ class GoogleDriveAdapter(StoragePort):
         return current_parent_id
 
     def _ensure_path_directories(self, path: str) -> str:
-        """파일 경로의 상위 디렉토리들을 생성하고 마지막 부모 폴더 ID를 반환합니다."""
+        """파일 업로드 경로 상의 모든 디렉토리가 존재하도록 보장합니다.
+
+        계층적 폴더 구조를 순회하며 누락된 폴더를 생성합니다.
+
+        Args:
+            path (str): 생성 또는 보장할 파일의 전체 경로.
+
+        Returns:
+            str: 파일이 들어갈 최종 부모 폴더의 ID.
+        """
         path = path.replace("\\", "/")
-        parts = path.strip("/").split("/")
+        parts = [p for p in path.strip("/").split("/") if p]
+
+        if not parts:
+            return self.root_folder_id
+
         dir_parts = parts[:-1]
 
         current_parent_id = self.root_folder_id
@@ -229,8 +266,16 @@ class GoogleDriveAdapter(StoragePort):
             print(f"[GoogleDrive] [Error] Workbook 업로드 실패 ({path}): {e}")
             return False
 
-    def _upload_file(self, data: io.BytesIO, path: str, mime_type: str):
-        """파일 업로드 (생성 또는 업데이트)."""
+    def _upload_file(self, data: io.BytesIO, path: str, mime_type: str) -> None:
+        """메모리 스트림 데이터를 지정된 경로에 업로드합니다 (덮어쓰기 지원).
+
+        파일명이 동일한 기존 파일이 있으면 업데이트(Update)하고, 없으면 생성(Create)합니다.
+
+        Args:
+            data (io.BytesIO): 업로드할 이진 데이터 스트림.
+            path (str): 드라이브 상의 저장 경로.
+            mime_type (str): 업로드할 파일의 MIME 타입.
+        """
         path = path.replace("\\", "/")
         filename = os.path.basename(path)
         parent_id = self._ensure_path_directories(path)
@@ -285,7 +330,8 @@ class GoogleDriveAdapter(StoragePort):
         try:
             # 부모 디렉토리 생성 로직 재사용. 구드에서는 폴더-파일 구분이 mimeType으로 되지만
             # 여기서는 마지막 파트까지 폴더로 취급하여 생성함
-            parts = path.strip("/").split("/")
+            path = path.replace("\\", "/")
+            parts = [p for p in path.strip("/").split("/") if p]
             current_parent_id = self.root_folder_id
             for part in parts:
                 current_parent_id = self._get_or_create_folder(part, current_parent_id)

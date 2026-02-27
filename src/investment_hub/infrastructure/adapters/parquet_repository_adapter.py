@@ -1,7 +1,6 @@
 """Parquet 기반 투자경고종목 레포지터리 어댑터 구현."""
 
 import os
-from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -196,10 +195,19 @@ class ParquetRepositoryAdapter(WarningStockRepository):
         return self._base_dir / f"{year}.parquet"
 
     def _to_dataframe(self, year: int, stocks: list[InvestmentWarningStock], prices: dict[str, list[DailyPriceData]]) -> pd.DataFrame:
-        """종목·시세 데이터를 Long-format DataFrame으로 변환합니다."""
+        """도메인 모델(종목·시세) 리스트를 Parquet 저장을 위한 Long-format DataFrame으로 변환합니다.
+
+        Args:
+            year (int): 기준 연도.
+            stocks (list[InvestmentWarningStock]): 변환할 종목 리스트.
+            prices (dict[str, list[DailyPriceData]]): 종목코드별 시세 데이터.
+
+        Returns:
+            pd.DataFrame: 스키마가 적용되고 정렬된 판다스 데이터프레임.
+        """
         records = self._prepare_records(year, stocks, prices)
         if not records: return pd.DataFrame(columns=_SCHEMA_COLUMNS)
-        
+
         df = pd.DataFrame(records)
         self._optimize_df_types(df)
         return df.sort_values(["designation_date", "code", "date"]).reset_index(drop=True)
@@ -215,7 +223,12 @@ class ParquetRepositoryAdapter(WarningStockRepository):
                 })
         return records
 
-    def _optimize_df_types(self, df: pd.DataFrame):
+    def _optimize_df_types(self, df: pd.DataFrame) -> None:
+        """데이터프레임의 컬럼 타입을 메모리 및 Arrow 엔진에 최적화된 형태로 변환합니다.
+
+        Args:
+            df (pd.DataFrame): 변환할 대상 데이터프레임.
+        """
         for col, dtype in _DTYPE_MAP.items():
             if col in df.columns: df[col] = df[col].astype(dtype)
         for col in ["designation_date", "release_date", "date"]:
@@ -241,13 +254,25 @@ class ParquetRepositoryAdapter(WarningStockRepository):
         return stocks
 
     def _restore_prices(self, df: pd.DataFrame) -> dict[str, list[DailyPriceData]]:
+        """데이터프레임 그룹에서 종목코드별 `DailyPriceData` 리스트를 복원합니다.
+
+        중복된 일자 데이터가 있는 경우 제거(deduplication)를 수행합니다.
+
+        Args:
+            df (pd.DataFrame): 로드된 Parquet 데이터프레임.
+
+        Returns:
+            dict[str, list[DailyPriceData]]: 종목코드 매핑 시세 딕셔너리.
+        """
         prices = {}
         for code, group in df.groupby("code"):
             c_str = str(code)
+            # 동일 종목 다중 지정으로 인한 시세 중복 로드 방지
+            group_unique = group.drop_duplicates("date").sort_values("date")
             prices[c_str] = [DailyPriceData(
                 code=c_str, name=str(r["name"]), date=pd.Timestamp(r["date"]).to_pydatetime(),
                 close=float(r["close"]), change_rate=float(r["change_rate"])
-            ) for _, r in group.sort_values("date").iterrows()]
+            ) for _, r in group_unique.iterrows()]
         return prices
 
     def _write_parquet_atomic(self, year: int, df: pd.DataFrame) -> None:
