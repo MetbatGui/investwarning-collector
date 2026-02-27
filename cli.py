@@ -65,6 +65,8 @@ def cmd_today(args: argparse.Namespace) -> int:
         int: 정상 처리 시 0 (성공), 오류 및 비정상 종료 시 1.
     """
     storage, repository = _setup_di(args)
+    # output_dir이 None이면 storage 타입에 따라 기본값 설정
+    output_dir = args.output_dir if args.output_dir is not None else ("" if args.storage == "drive" else "output")
 
     target_date = args.date
     try:
@@ -79,7 +81,7 @@ def cmd_today(args: argparse.Namespace) -> int:
 
     from investment_hub.application.services import WarningCollectionService
 
-    service = WarningCollectionService(repository=repository, storage=storage)
+    service = WarningCollectionService(repository=repository, storage=storage, output_dir=output_dir)
     ok = service.collect_today(
         end_date=target_date,
         days=args.days,
@@ -103,11 +105,15 @@ def cmd_year(args: argparse.Namespace) -> int:
     if not valid_years: return 1
 
     from investment_hub.application.services import WarningCollectionService
-    service = WarningCollectionService(repository=repository, storage=storage)
-    
+    output_dir = args.output_dir if args.output_dir is not None else ("" if args.storage == "drive" else "output")
+    service = WarningCollectionService(repository=repository, storage=storage, output_dir=output_dir)
+
     print(f"\n{'='*60}\n  연도별 수집: {valid_years}\n{'='*60}")
-    results = {y: ("[완료]" if service.collect_year(y, include_active=args.include_active) else "[실패]") for y in valid_years}
-    
+    results = {
+        y: ("[완료]" if service.collect_year(y, end_date=args.end_date, include_active=args.include_active) else "[실패]")
+        for y in valid_years
+    }
+
     print(f"\n{'='*60}\n  최종 결과 요약\n{'='*60}")
     for y, s in results.items(): print(f"  {y}년: {s}")
     return 0
@@ -126,7 +132,8 @@ def cmd_export_excel(args: argparse.Namespace) -> int:
 
     from investment_hub.application.services import ReportGenerationService
 
-    service = ReportGenerationService(repository=repository, storage=storage)
+    output_dir = args.output_dir if args.output_dir is not None else ("" if args.storage == "drive" else "output")
+    service = ReportGenerationService(repository=repository, storage=storage, output_dir=output_dir)
     year = args.year
     ok = service.generate_excel_report(year=year)
     return 0 if ok else 1
@@ -172,6 +179,7 @@ def _build_storage_parser() -> argparse.ArgumentParser:
     p.add_argument("--client-secret", dest="client_secret", default="secrets/client_secret.json", help="OAuth 비밀파일 경로")
     p.add_argument("--drive-folder", dest="drive_folder", default="KRX_Auto_Crawling_Data", help="Drive 루트 폴더명")
     p.add_argument("--drive-folder-id", dest="drive_folder_id", help="Drive 루트 폴더 ID (환경 변수보다 우선)")
+    p.add_argument("--output-dir", dest="output_dir", help="출력 디렉토리 경로 (드라이브 사용 시 기본값은 루트)")
     return p
 
 def _add_today_cmd(subparsers, common):
@@ -188,6 +196,7 @@ def _add_year_cmd(subparsers, common):
     g.add_argument("--year", type=int, help="특정 연도")
     g.add_argument("--start", type=int, default=2020, help="시작 연도")
     p.add_argument("--end", type=int, default=datetime.now().year, help="종료 연도")
+    p.add_argument("--end-date", dest="end_date", help="데이터 수집 종료 상한일 (YYYY-MM-DD)")
     p.add_argument("--exclude-active", dest="include_active", action="store_false", help="진행중 제외")
     p.set_defaults(include_active=True)
     p.set_defaults(func=cmd_year)
@@ -207,7 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cli", description="투자경고종목 수집기")
     common = _build_storage_parser()
     subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
-    
+
     _add_today_cmd(subparsers, common)
     _add_year_cmd(subparsers, common)
     _add_export_cmd(subparsers, common)

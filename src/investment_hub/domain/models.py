@@ -59,14 +59,14 @@ class InvestmentWarningStock:
         days = self.warning_days
         return days is not None and days <= max_days
 
-    def is_collectible_at(self, target_date: datetime, trading_days: list) -> bool:
+    def is_collectible_at(self, target_date: datetime, trading_days: list[datetime]) -> bool:
         """특정 날짜가 당해 종목의 유효 수집 기간(이벤트 윈도우) 내에 있는지 평가합니다.
 
         원칙적으로 `지정일 <= 판별일 <= 해제일로부터 3영업일 차` 범위에 속할 때 수집 대상으로 판정합니다.
 
         Args:
             target_date (datetime): 수집 여부를 판단할 대상 날짜.
-            trading_days (list): 전체 휴장일이 제외된 영업일 목록.
+            trading_days (list[datetime]): 전체 휴장일이 제외된 영업일 목록.
 
         Returns:
             bool: 유효한 수집 기간에 포함되면 True, 그렇지 않으면 False.
@@ -95,6 +95,48 @@ class InvestmentWarningStock:
         # 최대 3번째 영업일까지만 허용
         limit_date = post_release[min(2, len(post_release) - 1)]
         return t_date <= limit_date
+
+    def get_raw_release_index(self, prices: list["DailyPriceData"]) -> int | None:
+        """시세 데이터 내에서 정확히 해제일인 날의 인덱스를 찾습니다.
+        
+        시각적 표기(하이라이트, 경고일수)를 위해 원본 해제 날짜를 확인합니다.
+
+        Args:
+            prices (list[DailyPriceData]): 시세 데이터 리스트.
+
+        Returns:
+            int | None: 정확한 해제일 인덱스. 찾지 못하면 None.
+        """
+        if self.release_date is None:
+            return None
+        rel_date = self.release_date.date()
+        for i, p in enumerate(prices):
+            if p.date.date() == rel_date:
+                return i
+        return None
+
+    def get_effective_release_index(self, prices: list["DailyPriceData"]) -> int | None:
+        """시세 데이터 내에서 해제일 또는 그 이후 가장 가까운 '실제 거래일'의 인덱스를 찾습니다.
+        
+        해제일 당일이 거래정지(등락률 0)인 경우 그 다음 영업일 시세를 기준으로 지표를 산출하기 위함입니다.
+
+        Args:
+            prices (list[DailyPriceData]): 시세 데이터 리스트.
+
+        Returns:
+            int | None: 유효한 해제 시점의 인덱스. 찾지 못하면 None.
+        """
+        if self.release_date is None:
+            return None
+
+        rel_date = self.release_date.date()
+        for i, p in enumerate(prices):
+            if p.date.date() >= rel_date:
+                # 등락률이 0이면 거래정지로 간주하고 다음 날을 찾음 (단, 마지막 시세라면 어쩔 수 없이 반환)
+                if p.change_rate == 0 and i < len(prices) - 1:
+                    continue
+                return i
+        return None
 
     def to_dict(self) -> dict:
         """도메인 모델의 데이터를 딕셔너리 형태로 변환합니다.
