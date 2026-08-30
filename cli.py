@@ -86,12 +86,17 @@ def cmd_today(args: argparse.Namespace) -> int:
     from investment_hub.application.services import WarningCollectionService
 
     service = WarningCollectionService(repository=repository, storage=storage, output_dir=output_dir)
-    ok = service.collect_today(
+    result = service.collect_today(
         end_date=target_date,
         days=args.days,
         include_active=args.include_active,
     )
-    return 0 if ok else 1
+    print(
+        f"[결과] success={result.success} discovered={result.discovered} "
+        f"new_stocks={result.new_stocks} new_price_rows={result.new_price_rows}"
+        + (f" reason={result.reason}" if result.reason else "")
+    )
+    return 0 if result.success else 1
 
 
 def _get_target_years(args: argparse.Namespace) -> list[int]:

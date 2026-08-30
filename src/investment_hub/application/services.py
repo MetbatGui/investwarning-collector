@@ -12,7 +12,7 @@ import pandas as pd
 
 from investment_hub.core.ports.repository_port import WarningStockRepository
 from investment_hub.core.ports.storage_port import StoragePort
-from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
+from investment_hub.domain.models import CollectionResult, DailyPriceData, InvestmentWarningStock
 from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
@@ -487,7 +487,7 @@ class WarningCollectionService:
                 prc_map.setdefault(r["code"], []).append(dp)
         return stk_map, prc_map
 
-    def collect_today(self, end_date: str, days: int = 1, include_active: bool = True) -> bool:
+    def collect_today(self, end_date: str, days: int = 1, include_active: bool = True) -> CollectionResult:
         """지정된 날짜 기준의 증분(Incremental) 시세를 수집하고 분석 리포트를 갱신합니다.
 
         일일 스케줄러에서 주로 호출되며, 해제일 동기화와 신규 종목 감지를 함께 수행합니다.
@@ -498,7 +498,8 @@ class WarningCollectionService:
             include_active (bool): 현재 경고 중인 종목을 결과에 포함할지 여부.
 
         Returns:
-            bool: 수집 및 업로드(저장소 갱신) 성공 시 True.
+            CollectionResult: 수집/업로드 결과와 변경 규모(discovered/new_stocks/new_price_rows)를
+                담은 값 객체.
         """
         logger, year, end_dt = setup_logging(end_date), int(end_date[:4]), datetime.strptime(end_date, "%Y-%m-%d")
 
@@ -506,27 +507,36 @@ class WarningCollectionService:
             all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
         except Exception as e:
             logger.error(f"KRX 조회 실패: {e}")
-            return False
+            return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
 
-        if not all_filtered: return False
+        if not all_filtered:
+            return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
 
         existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
         existing_codes = {s.code for s in existing_stocks}
+        new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
 
         target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
 
-        has_new_data = bool(missing_dates) or any(s.code not in existing_codes for s in filtered)
+        has_new_data = bool(missing_dates) or new_stock_count > 0
         excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
         excel_exists = self.storage.path_exists(excel_path)
 
         if not has_new_data and excel_exists:
             logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
-            return True
+            return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
         elif not excel_exists:
             logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
 
         all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
-        return self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+        saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+        return CollectionResult(
+            success=saved,
+            discovered=len(all_filtered),
+            new_stocks=new_stock_count,
+            new_price_rows=len(all_new_rows),
+            reason="" if saved else "저장/업로드 실패",
+        )
 
 
 class ReportGenerationService:
