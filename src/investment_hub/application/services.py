@@ -248,7 +248,7 @@ class WarningCollectionService:
         year: int,
         all_filtered: list,
         logger: logging.Logger,
-    ) -> None:
+    ) -> set[int]:
         """이전 수집분 중 아직 '진행중'이었던 종목에 대해 KRX 최신 해제일(release_date)이 감지되면 원자적으로 동기화 갱신합니다.
 
         올해와 전년도 분의 Parquet 파일을 대상으로 확인 및 수정을 일괄 시도합니다.
@@ -257,11 +257,17 @@ class WarningCollectionService:
             year (int): 탐색 시점 기준 대상 연도.
             all_filtered (list[InvestmentWarningStock]): 현재 KRX에서 응답한 실시간 메타 배열.
             logger (logging.Logger): 변경 내역 트래킹에 사용될 로거.
+
+        Returns:
+            set[int]: 실제로 DB가 갱신된 연도 집합. 호출부는 이 연도들의 엑셀도 함께
+                재생성해야 한다(orchestration_guide.md §4.1) - DB만 바뀌고 산출물이
+                안 바뀌면 사람이 보는 결과가 낡은 상태로 남는다.
         """
         if not all_filtered:
-            return
+            return set()
 
         krx_release = {s.code: s.release_date for s in all_filtered}
+        changed_years: set[int] = set()
 
         for target_year in (year - 1, year):
             if not self.repository.year_exists(target_year):
@@ -288,6 +294,22 @@ class WarningCollectionService:
             if changes > 0:
                 self.repository.save_year(target_year, stocks, prices)
                 logger.info(f"  [{target_year}년] release_date {changes}종목 동기화 완료")
+                changed_years.add(target_year)
+
+        return changed_years
+
+    def _regenerate_excel_for_year(self, year: int, logger: logging.Logger) -> None:
+        """저장소에서 해당 연도 데이터를 다시 읽어 엑셀 리포트를 재생성/저장한다.
+
+        _sync_release_dates가 DB만 바꾸고 끝내는 연도(대개 전년도)의 산출물을
+        따라잡기 위해 쓴다 - orchestration_guide.md §4.1.
+        """
+        stocks, prices = self.repository.load_year(year)
+        if not stocks:
+            return
+        wb = self.excel_exporter.export(year, stocks, prices)
+        self.storage.save_workbook(wb, os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx"))
+        logger.info(f"  [{year}년] release_date 동기화 반영해 엑셀 재생성 완료")
 
     # ─────────────────────────────────────────────────────────────────────────
     # 증분 수집 메인 로직
@@ -325,7 +347,7 @@ class WarningCollectionService:
         filtered = [s for s in all_filtered if s.designation_date >= pd.to_datetime(year_start)]
         return all_filtered, filtered
 
-    def _step2_sync_and_load(self, year: int, all_filtered: list, logger: logging.Logger) -> tuple[list, dict]:
+    def _step2_sync_and_load(self, year: int, all_filtered: list, logger: logging.Logger) -> tuple[list, dict, set[int]]:
         """[Step] 최신 해제일 정보를 동기화하고 해당 연도의 기존 데이터를 로드합니다.
 
         Args:
@@ -334,11 +356,13 @@ class WarningCollectionService:
             logger (logging.Logger): 작업 로그를 기록할 로거.
 
         Returns:
-            tuple[list, dict]: (기존 저장된 종목 리스트, 종목별 시세 맵)
+            tuple[list, dict, set[int]]: (기존 저장된 종목 리스트, 종목별 시세 맵,
+                release_date 동기화로 DB가 바뀐 연도 집합 - 대개 year-1이 포함될 수 있다)
         """
         logger.info("[2/6] release_date 동기화 (현재·이전 연도 Parquet)...")
-        self._sync_release_dates(year, all_filtered, logger)
-        return self.repository.load_year(year)
+        changed_years = self._sync_release_dates(year, all_filtered, logger)
+        stocks, prices = self.repository.load_year(year)
+        return stocks, prices, changed_years
 
     def _step3_get_dates(self, end_dt: datetime, days: int, existing_prices: dict) -> tuple[list[str], list[str]]:
         """[Step] 수집이 필요한 타겟 영업일 목록과 누락된 날짜를 식별합니다.
@@ -523,7 +547,15 @@ class WarningCollectionService:
             if not all_filtered:
                 return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
 
-            existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
+            existing_stocks, existing_prices, release_date_changed_years = self._step2_sync_and_load(
+                year, all_filtered, logger
+            )
+            # release_date 동기화가 작년(year-1) DB를 바꿨다면, 이번 실행이 올해분만
+            # 재생성/재업로드하고 끝나면 작년 엑셀이 낡은 채로 남는다(orchestration_guide.md
+            # §4.1). year 자신은 아래 흐름에서 어차피 처리되므로 여기서는 그 외의
+            # 변경 연도(사실상 year-1)만 별도로 잡아 재생성한다.
+            for changed_year in release_date_changed_years - {year}:
+                self._regenerate_excel_for_year(changed_year, logger)
             existing_codes = {s.code for s in existing_stocks}
             new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
 
