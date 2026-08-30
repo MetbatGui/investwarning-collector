@@ -9,23 +9,23 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from investment_hub.core.ports.storage_port import StoragePort
-from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
+from investment_hub.infrastructure.adapters.sqlite_repository_adapter import SqliteRepositoryAdapter
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 저장소 및 레포지토리 설정 헬퍼 (Composition Root)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryAdapter]:
+def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, SqliteRepositoryAdapter]:
     """CLI 인자(args)에 따라 의존성을 가지는 저장소 어댑터와 레포지토리 객체를 생성 및 주입합니다.
 
     Args:
         args (argparse.Namespace): 사용자가 CLI를 통해 입력한 파라미터 묶음(Storage Type 등 포함).
 
     Returns:
-        tuple[StoragePort, ParquetRepositoryAdapter]:
+        tuple[StoragePort, SqliteRepositoryAdapter]:
             - 선택된 스토리지 포트 구현체 (Local 혹은 Google Drive)
-            - 데이터를 취급할 Parquet 레포지터리 어댑터
+            - 데이터를 취급할 SQLite 레포지터리 어댑터 (SSOT, db_ssot_guide.md)
     """
     storage_type = getattr(args, "storage", "local")
 
@@ -49,8 +49,8 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, ParquetRepositoryA
         print("[설정] 로컬 저장소 사용")
         storage = LocalStorageAdapter()
 
-    # Repository는 Parquet을 기본으로 사용
-    repository = ParquetRepositoryAdapter(base_dir="output/parquet")
+    # Repository는 SQLite를 SSOT로 사용 (db_ssot_guide.md)
+    repository = SqliteRepositoryAdapter(base_dir="output/db")
     return storage, repository
 
 
