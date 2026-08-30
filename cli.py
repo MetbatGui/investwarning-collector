@@ -122,13 +122,16 @@ def cmd_year(args: argparse.Namespace) -> int:
 
     logger.info(f"연도별 수집: {valid_years}")
     results = {
-        y: ("[완료]" if service.collect_year(y, end_date=args.end_date, include_active=args.include_active) else "[실패]")
+        y: service.collect_year(y, end_date=args.end_date, include_active=args.include_active)
         for y in valid_years
     }
 
     logger.info("최종 결과 요약")
-    for y, s in results.items(): logger.info(f"  {y}년: {s}")
-    return 0
+    for y, ok in results.items(): logger.info(f"  {y}년: {'[완료]' if ok else '[실패]'}")
+
+    # 하나라도 실패하면 exit code로 알려야 한다 - 예전엔 결과와 무관하게 항상 0을
+    # 반환해 크론/스크립트가 실패를 감지할 수 없었다(docker_guide.md §10).
+    return 0 if all(results.values()) else 1
 
 
 def cmd_export_excel(args: argparse.Namespace) -> int:
