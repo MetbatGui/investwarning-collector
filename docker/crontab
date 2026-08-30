@@ -1,0 +1,6 @@
+# 평일(월~금) 16:00 KST에 최근 7일 투자경고종목 증분 수집 + Drive 동기화 실행.
+# run_collector_7days_drive.bat(기존 Windows 작업 스케줄러용)을 그대로 이식.
+#
+# root로 실행 - /proc/1/fd/1(컨테이너 stdout)이 root:root 전용 권한(l-wx------)이라
+# nonroot로 돌리면 리다이렉션 자체가 Permission denied로 실패해 잡이 아예 안 돎.
+0 16 * * 1-5 root /app/docker/run-daily.sh >> /proc/1/fd/1 2>&1

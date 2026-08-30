@@ -1,0 +1,49 @@
+# docker/ 서브폴더에 compose 파일을 두면 Compose가 프로젝트 이름을 폴더명("docker")으로
+# 추론해 같은 구조를 쓰는 다른 프로젝트와 이름이 충돌할 수 있다(docker_guide.md §9).
+# 실제로 다른 프로젝트에서 이 문제로 별개 프로젝트의 운영 중이던 컨테이너가 삭제된 사고가
+# 있었으므로 명시적으로 지정한다.
+name: investwarning-collector
+
+services:
+  # 수동 1회 실행용
+  # 사용 예: docker compose -f docker/docker-compose.yml run --rm investwarning-collector python cli.py today --storage drive
+  investwarning-collector:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../output:/app/output
+      - ../cache:/app/cache
+      - ../logs:/app/logs
+      # OAuth refresh token(token.json)이 실행 중 갱신되므로 쓰기 가능해야 한다.
+      - ../secrets:/app/secrets
+      - ../.env:/app/.env:ro
+    environment:
+      TZ: Asia/Seoul
+
+  # 컨테이너 내장 cron으로 daily 수집을 주기 실행 (스케줄은 docker/crontab 참고).
+  # cron 데몬 기동에 root 권한이 필요해 user를 root로 오버라이드함.
+  investwarning-collector-cron:
+    container_name: investwarning-collector-cron
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    entrypoint: ["/app/docker/cron-entrypoint.sh"]
+    user: root
+    restart: unless-stopped
+    volumes:
+      - ../output:/app/output
+      - ../cache:/app/cache
+      - ../logs:/app/logs
+      - ../secrets:/app/secrets
+      - ../.env:/app/.env:ro
+    environment:
+      TZ: Asia/Seoul
+    # json-file 드라이버는 기본적으로 로그 크기 제한이 없어 계속 커진다.
+    # 파이썬 쪽 로그(logs/*.log)는 이미 날짜별 파일로 분리되니 여기서 막는 건
+    # 순수 컨테이너 stdout(cron 출력) 캡처분.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
