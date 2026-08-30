@@ -93,18 +93,37 @@ class WarningCollectionService:
             include_active (bool): 현재 경고 유지 중인 종목 포함 여부.
 
         Returns:
-            bool: 성공적으로 수집 및 저장이 완료되면 True.
+            bool: 성공적으로 수집 및 저장, DB 업로드가 완료되면 True.
         """
         _module_logger.info(f"[{year}년 전체 백필 시작]")
 
-        filtered = self._step_y1_fetch_and_filter(year, end_date, include_active)
-        if not filtered: return False
+        # DB SSOT 세션: collect_today와 동일하게 다운로드->작업->업로드로 감싼다
+        # (db_ssot_guide.md §6) - 예전엔 --action year 경로가 DB를 Drive와 전혀
+        # 동기화하지 않았다. 백필이야말로 DB 정합성이 가장 중요한 경로다.
+        sync_down_ok = self._sync_db_down(year, _module_logger)
 
-        prices_by_code = self._step_y2_collect_prices(filtered)
-        if not prices_by_code: return False
+        try:
+            filtered = self._step_y1_fetch_and_filter(year, end_date, include_active)
+            if not filtered:
+                saved = False
+            else:
+                prices_by_code = self._step_y2_collect_prices(filtered)
+                if not prices_by_code:
+                    saved = False
+                else:
+                    filtered = [s for s in filtered if prices_by_code.get(s.code)]
+                    saved = self._step_y3_save_and_export(year, filtered, prices_by_code)
+        finally:
+            if sync_down_ok:
+                upload_ok = self._sync_db_up(year, _module_logger)
+            else:
+                _module_logger.warning(
+                    f"  [DB 업로드 건너뜀] {year}년은 다운로드 실패로 로컬을 신뢰할 수 없어 "
+                    "이번 실행에서 업로드하지 않습니다."
+                )
+                upload_ok = False
 
-        filtered = [s for s in filtered if prices_by_code.get(s.code)]
-        return self._step_y3_save_and_export(year, filtered, prices_by_code)
+        return saved and upload_ok
 
     def _step_y1_fetch_and_filter(self, year: int, end_date_str: str | None, include_active: bool) -> list:
         """[Step] 지정된 연도의 종목 목록을 가져오고 정해진 규칙에 따라 필터링합니다.
@@ -510,84 +529,145 @@ class WarningCollectionService:
 
         # DB SSOT 세션 시작: 원격(Drive)에 더 최신 DB가 있으면 로컬 작업 사본으로 받아온다
         # (db_ssot_guide.md §6). 로컬 storage는 repository와 동일 파일을 가리키므로 no-op이다.
-        self._sync_db_down(year, logger)
-        self._sync_db_down(year - 1, logger)
+        # 다운로드가 (원격에 파일이 있는데도) 실패한 연도는 로컬을 신뢰할 수 없으므로
+        # finally에서 그 연도의 업로드를 건너뛴다(§6.1/§6.2 - "없음"과 "실패"를 구분하고,
+        # 실패 시 빈/낡은 로컬로 원격을 덮어쓰지 않는다).
+        sync_down_ok = {
+            year: self._sync_db_down(year, logger),
+            year - 1: self._sync_db_down(year - 1, logger),
+        }
 
         try:
-            try:
-                all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
-            except Exception as e:
-                logger.error(f"KRX 조회 실패: {e}")
-                return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
-
-            if not all_filtered:
-                return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
-
-            existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
-            existing_codes = {s.code for s in existing_stocks}
-            new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
-
-            target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
-
-            has_new_data = bool(missing_dates) or new_stock_count > 0
-            excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
-            excel_exists = self.storage.path_exists(excel_path)
-
-            if not has_new_data and excel_exists:
-                logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
-                return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
-            elif not excel_exists:
-                logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
-
-            all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
-            saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
-            return CollectionResult(
-                success=saved,
-                discovered=len(all_filtered),
-                new_stocks=new_stock_count,
-                new_price_rows=len(all_new_rows),
-                reason="" if saved else "저장/업로드 실패",
-            )
+            result = self._collect_today_impl(end_date, days, include_active, year, end_dt, logger)
         finally:
             # 이번 실행에서 실제로 쓰기 작업을 받을 수 있는 저장 단위(올해·작년 DB 파일)를
-            # 결과와 무관하게 항상 업로드한다 - release_date 동기화만 일어나고 조기
+            # 결과와 무관하게 항상 업로드 시도한다 - release_date 동기화만 일어나고 조기
             # 반환되는 경로에서도 로컬 변경분이 원격에 반영되도록 한다(orchestration_guide.md §3).
-            self._sync_db_up(year, logger)
-            self._sync_db_up(year - 1, logger)
+            sync_up_failed = False
+            for y in (year, year - 1):
+                if not sync_down_ok[y]:
+                    logger.warning(
+                        f"  [DB 업로드 건너뜀] {y}년은 다운로드 실패로 로컬을 신뢰할 수 없어 "
+                        "이번 실행에서 업로드하지 않습니다."
+                    )
+                    continue
+                if not self._sync_db_up(y, logger):
+                    sync_up_failed = True
 
-    def _sync_db_down(self, year: int, logger: logging.Logger) -> None:
+        if sync_up_failed:
+            # 로컬은 항상 불신의 대상이라(db_ssot_guide.md §6.2) 업로드 실패를 조용히
+            # 넘기면 이번에 계산한 최신 데이터가 다음 실행에서 낡은 원격 사본에 가려질 수 있다.
+            result.db_upload_failed = True
+        return result
+
+    def _collect_today_impl(
+        self,
+        end_date: str,
+        days: int,
+        include_active: bool,
+        year: int,
+        end_dt: datetime,
+        logger: logging.Logger,
+    ) -> CollectionResult:
+        """collect_today()의 수집/저장 로직 본체. DB 세션 다운로드/업로드는 호출부가 감싼다."""
+        try:
+            all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+        except Exception as e:
+            logger.error(f"KRX 조회 실패: {e}")
+            return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
+
+        if not all_filtered:
+            return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
+
+        existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
+        existing_codes = {s.code for s in existing_stocks}
+        new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
+
+        target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
+
+        has_new_data = bool(missing_dates) or new_stock_count > 0
+        excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
+        excel_exists = self.storage.path_exists(excel_path)
+
+        if not has_new_data and excel_exists:
+            logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
+            return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
+        elif not excel_exists:
+            logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
+
+        all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
+        saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+        return CollectionResult(
+            success=saved,
+            discovered=len(all_filtered),
+            new_stocks=new_stock_count,
+            new_price_rows=len(all_new_rows),
+            reason="" if saved else "저장/업로드 실패",
+        )
+
+    def _sync_db_down(self, year: int, logger: logging.Logger) -> bool:
         """DB SSOT(Drive)의 연도별 DB 파일을 로컬 작업 사본으로 받아온다.
 
         storage가 LocalStorageAdapter면 get_file()이 이미 repository와 같은 파일을
         가리키므로 로컬 파일에 그대로 다시 쓰는 건 자기 자신을 덮어쓰는 no-op이다.
         storage가 GoogleDriveAdapter일 때만 실질적인 원격->로컬 다운로드가 된다.
+
+        "원격에 아직 없음"(최초 백필 전)과 "원격에 있는데 다운로드 실패"를
+        path_exists()로 구분한다(db_ssot_guide.md §6.1) - 후자를 전자로 오인하면
+        빈/낡은 로컬 사본으로 계속 진행하다 그대로 원격에 덮어쓰는 사고가 난다.
+
+        Returns:
+            bool: 원격에 없어서 건너뛰었거나(정상) 다운로드에 성공하면 True.
+                원격에 파일이 있는 게 확인됐는데 다운로드 자체가 실패하면 False -
+                호출부는 이 연도를 이번 실행에서 업로드 대상에서 제외해야 한다.
         """
         db_path = getattr(self.repository, "db_path", None)
         if db_path is None:
-            return
+            return True
         local_path = db_path(year)
         remote_path = str(local_path).replace("\\", "/")
         try:
+            if not self.storage.path_exists(remote_path):
+                return True  # 원격에 아직 없음 - 정상(최초 백필 전), 로컬 상태 그대로 진행
             data = self.storage.get_file(remote_path)
-            if data is not None:
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(data)
+            if data is None:
+                logger.warning(
+                    f"  [DB 다운로드 실패] {year}년 - 로컬 사본으로 계속 진행하되 "
+                    "이번 실행 결과는 업로드하지 않습니다."
+                )
+                return False
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(data)
+            return True
         except Exception as e:
-            logger.warning(f"  [DB 동기화 건너뜀] {year}년 DB 다운로드 실패(로컬 사본 유지): {e}")
+            logger.warning(
+                f"  [DB 다운로드 실패] {year}년 - 로컬 사본으로 계속 진행하되 "
+                f"이번 실행 결과는 업로드하지 않습니다: {e}"
+            )
+            return False
 
-    def _sync_db_up(self, year: int, logger: logging.Logger) -> None:
-        """로컬 작업 사본의 연도별 DB 파일을 DB SSOT(Drive)로 업로드한다."""
+    def _sync_db_up(self, year: int, logger: logging.Logger) -> bool:
+        """로컬 작업 사본의 연도별 DB 파일을 DB SSOT(Drive)로 업로드한다.
+
+        Returns:
+            bool: 업로드 성공(또는 업로드할 로컬 파일이 없어 건너뜀) 시 True, 실패 시 False -
+                호출부는 False면 exit code를 0이 아닌 값으로 끝내야 한다(db_ssot_guide.md §6.2).
+        """
         db_path = getattr(self.repository, "db_path", None)
         if db_path is None:
-            return
+            return True
         local_path = db_path(year)
         if not local_path.exists():
-            return
+            return True
         remote_path = str(local_path).replace("\\", "/")
         try:
-            self.storage.put_file(remote_path, local_path.read_bytes())
+            if not self.storage.put_file(remote_path, local_path.read_bytes()):
+                logger.warning(f"  [DB 업로드 실패] {year}년")
+                return False
+            return True
         except Exception as e:
-            logger.warning(f"  [DB 동기화 실패] {year}년 DB 업로드 실패: {e}")
+            logger.warning(f"  [DB 업로드 실패] {year}년 - {e}")
+            return False
 
 
 class ReportGenerationService:
