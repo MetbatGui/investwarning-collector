@@ -186,3 +186,19 @@ class DailyPriceData:
             "close": self.close,
             "change_rate": self.change_rate,
         }
+
+
+@dataclass
+class CollectionResult:
+    """한 번의 수집(collect_today/collect_year) 실행 결과를 담는 값 객체.
+
+    오케스트레이션 서비스가 "무엇이 바뀌었는지"를 명시적으로 반환하게 해,
+    CLI는 이 값을 로그/exit code로 변환만 하면 되도록 한다
+    (orchestration_guide.md §1, §2.2).
+    """
+
+    success: bool
+    discovered: int = 0
+    new_stocks: int = 0
+    new_price_rows: int = 0
+    reason: str = ""

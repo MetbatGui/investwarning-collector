@@ -63,13 +63,18 @@ def test_build_rows_filtering(exporter, sample_stock, sample_prices):
     # 1/1과 1/10, 1/15는 제외됨
     # 포함: 1/2, 1/3, 1/4, 1/5, 1/6(해제일), 1/7, 1/8, 1/9 -> 총 8개
     assert len(row["prices_by_trading_day"]) == 8
-    assert row["release_trading_day"] == 4  # 1/2(0), 1/3(1), 1/4(2), 1/5(3), 1/6(4)
+    # raw_release_idx: 시세 목록 내에서 정확히 해제일(1/6)인 날의 인덱스
+    # 1/2(0), 1/3(1), 1/4(2), 1/5(3), 1/6(4)
+    assert row["raw_release_idx"] == 4
+    # 해제일 당일 거래정지(등락률 0)가 아니므로 effective_release_idx도 동일
+    assert row["effective_release_idx"] == 4
 
 
 def test_calc_returns_valid_data(exporter, sample_stock, sample_prices):
     """해제전 등락률 = (1/5 종가 / 1/2 종가) - 1, 해제직후 등락률 = (1/6 종가 / 1/5 종가) - 1"""
     rows_data, _ = exporter._build_rows([sample_stock], {"005930": sample_prices})
-    pre_return, post_return = exporter._calc_returns(rows_data[0])
+    row = rows_data[0]
+    pre_return, post_return = exporter._get_warning_performance(row["prices_by_trading_day"], row["raw_release_idx"])
 
     # 해제전: 92000 / 70000 - 1 = 31.43%
     assert pre_return == 31.43
@@ -83,7 +88,7 @@ def test_export_workbook_structure(exporter, sample_stock, sample_prices):
     wb = exporter.export(2025, [sample_stock], {"005930": sample_prices})
     ws = wb.active
 
-    assert ws.title == "투자경고_2025"
+    assert ws.title == "2025년 투자경고종목분석"
 
     # 헤더 검증
     headers = [cell.value for cell in ws[1]]
@@ -99,13 +104,13 @@ def test_export_workbook_structure(exporter, sample_stock, sample_prices):
     ]
     assert "D+0" in headers
 
-    # 데이터 행 검증
+    # 데이터 행 검증 (등락률은 문자열로 기록됨 - _write_data가 str()로 변환)
     row2 = [cell.value for cell in ws[2]]
     assert row2[0] == "삼성전자"
     assert row2[1] == "005930"
     assert row2[5] == 4  # 경고일수 (1/6 - 1/2)
-    assert row2[6] == 31.43  # pre_return
-    assert row2[7] == 3.26  # post_return
+    assert row2[6] == "31.43"  # pre_return
+    assert row2[7] == "3.26"  # post_return
     assert row2[8] == 70000  # D+0 종가
     assert row2[12] == 95000  # D+4 (해제일) 종가
 
@@ -114,14 +119,14 @@ def test_export_workbook_structure(exporter, sample_stock, sample_prices):
     d1_cell = ws.cell(row=2, column=8 + 1 + 1)  # base(8) + D+1(2) = 10
     assert d1_cell.fill.start_color.index in ("FFFFCCCC", "00FFCCCC")  # aRGB Format (openpyxl 내부 색상값 패턴)
 
-    # D+4: 해제일이므로 녹색이어야 함
+    # D+4: 해제일이므로 release 색상(연한 파랑)이어야 함
     d4_cell = ws.cell(row=2, column=8 + 4 + 1)
-    assert d4_cell.fill.start_color.index in ("FFCCFFCC", "00CCFFCC")
+    assert d4_cell.fill.start_color.index in ("FFCCEEFF", "00CCEEFF")
 
 
 def test_export_empty_data(exporter):
     """빈 데이터 전달 시 기본 구조를 가진 Workbook 반환"""
     wb = exporter.export(2025, [], {})
     ws = wb.active
-    assert ws.title == "투자경고_2025"
+    assert ws.title == "2025년 투자경고종목분석"
     assert ws.max_row == 1  # 데이터가 없으면 헤더도 안 써짐

@@ -12,11 +12,13 @@ import pandas as pd
 
 from investment_hub.core.ports.repository_port import WarningStockRepository
 from investment_hub.core.ports.storage_port import StoragePort
-from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
+from investment_hub.domain.models import CollectionResult, DailyPriceData, InvestmentWarningStock
+from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
 from investment_hub.visualization.excel_exporter import WarningExcelExporter
+
+_module_logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 로깅 설정
@@ -31,6 +33,9 @@ def setup_logging(date_str: str) -> logging.Logger:
     logger = logging.getLogger("WarningCollectionService")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    # 이 로거는 자체 StreamHandler를 아래에서 추가하므로, 루트 로거(cli.py의
+    # basicConfig)로 전파되면 같은 메시지가 두 번 출력된다.
+    logger.propagate = False
 
     fmt = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(message)s",
@@ -90,7 +95,7 @@ class WarningCollectionService:
         Returns:
             bool: 성공적으로 수집 및 저장이 완료되면 True.
         """
-        print(f"\n[{year}년 전체 백필 시작]")
+        _module_logger.info(f"[{year}년 전체 백필 시작]")
 
         filtered = self._step_y1_fetch_and_filter(year, end_date, include_active)
         if not filtered: return False
@@ -112,7 +117,7 @@ class WarningCollectionService:
         Returns:
             list[InvestmentWarningStock]: 필터링된 종목 객체 리스트.
         """
-        print(f"[1/4] '{year}' 연도 종목 스크래핑...")
+        _module_logger.info(f"[1/4] '{year}' 연도 종목 스크래핑...")
         start_date = f"{year}-01-01"
 
         now = datetime.now()
@@ -123,10 +128,10 @@ class WarningCollectionService:
         try:
             stocks = fetch_investment_warning_stocks(start_date, end_date)
             filtered = self._filter_stocks(stocks, start_date, end_date, include_active)
-            print(f"  → 전체 {len(stocks)}종목 중 정책 부합 {len(filtered)}종목")
+            _module_logger.info(f"  → 전체 {len(stocks)}종목 중 정책 부합 {len(filtered)}종목")
             return filtered
         except Exception as e:
-            print(f"스크래핑 중 오류: {e}"); return []
+            _module_logger.error(f"스크래핑 중 오류: {e}"); return []
 
     def _step_y2_collect_prices(self, stocks: list) -> dict:
         """[Step] 필터링된 종목들에 대해 필요한 전체 기간 시세를 일괄 수집합니다.
@@ -137,11 +142,11 @@ class WarningCollectionService:
         Returns:
             dict: 종목코드를 키로, DailyPriceData 리스트를 값으로 갖는 맵.
         """
-        print("\n[3/4] 시세 데이터 수집...")
+        _module_logger.info("[3/4] 시세 데이터 수집...")
         try:
             return collect_daily_prices_batch(stocks, trading_days_after_release=self.trading_days_after_release)
         except Exception as e:
-            print(f"시세 수집 중 오류: {e}"); return {}
+            _module_logger.error(f"시세 수집 중 오류: {e}"); return {}
 
     def _step_y3_save_and_export(self, year: int, stocks: list, prices: dict) -> bool:
         """[Step] 수집된 데이터를 영구 저장소에 기록하고 엑셀 리포트를 생성합니다.
@@ -154,14 +159,14 @@ class WarningCollectionService:
         Returns:
             bool: 저장 및 생성 성공 여부.
         """
-        print("\n[4/4] 결과 저장 (Parquet + Excel)...")
+        _module_logger.info("[4/4] 결과 저장...")
         self.storage.ensure_directory(self.output_dir)
         self.repository.save_year(year, stocks, prices)
 
         re_stocks, re_prices = self.repository.load_year(year)
         wb = self.excel_exporter.export(year, re_stocks, re_prices)
         self.storage.save_workbook(wb, os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx"))
-        print(f"\n  [완료] {year}년 수집 백필 및 Excel 생성 완료")
+        _module_logger.info(f"[완료] {year}년 수집 백필 및 Excel 생성 완료")
         return True
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -310,7 +315,7 @@ class WarningCollectionService:
         end_date = end_dt.strftime("%Y-%m-%d")
 
         if end_dt.year < year and not end_date_str:
-            print("  [건너뜀] 대상 기간이 유효하지 않음 (미래 연도)")
+            _module_logger.info("[건너뜀] 대상 기간이 유효하지 않음 (미래 연도)")
             return [], []
 
         cross_year = self.repository.year_exists(year - 1)
@@ -487,7 +492,7 @@ class WarningCollectionService:
                 prc_map.setdefault(r["code"], []).append(dp)
         return stk_map, prc_map
 
-    def collect_today(self, end_date: str, days: int = 1, include_active: bool = True) -> bool:
+    def collect_today(self, end_date: str, days: int = 1, include_active: bool = True) -> CollectionResult:
         """지정된 날짜 기준의 증분(Incremental) 시세를 수집하고 분석 리포트를 갱신합니다.
 
         일일 스케줄러에서 주로 호출되며, 해제일 동기화와 신규 종목 감지를 함께 수행합니다.
@@ -498,35 +503,91 @@ class WarningCollectionService:
             include_active (bool): 현재 경고 중인 종목을 결과에 포함할지 여부.
 
         Returns:
-            bool: 수집 및 업로드(저장소 갱신) 성공 시 True.
+            CollectionResult: 수집/업로드 결과와 변경 규모(discovered/new_stocks/new_price_rows)를
+                담은 값 객체.
         """
         logger, year, end_dt = setup_logging(end_date), int(end_date[:4]), datetime.strptime(end_date, "%Y-%m-%d")
 
+        # DB SSOT 세션 시작: 원격(Drive)에 더 최신 DB가 있으면 로컬 작업 사본으로 받아온다
+        # (db_ssot_guide.md §6). 로컬 storage는 repository와 동일 파일을 가리키므로 no-op이다.
+        self._sync_db_down(year, logger)
+        self._sync_db_down(year - 1, logger)
+
         try:
-            all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+            try:
+                all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+            except Exception as e:
+                logger.error(f"KRX 조회 실패: {e}")
+                return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
+
+            if not all_filtered:
+                return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
+
+            existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
+            existing_codes = {s.code for s in existing_stocks}
+            new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
+
+            target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
+
+            has_new_data = bool(missing_dates) or new_stock_count > 0
+            excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
+            excel_exists = self.storage.path_exists(excel_path)
+
+            if not has_new_data and excel_exists:
+                logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
+                return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
+            elif not excel_exists:
+                logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
+
+            all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
+            saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+            return CollectionResult(
+                success=saved,
+                discovered=len(all_filtered),
+                new_stocks=new_stock_count,
+                new_price_rows=len(all_new_rows),
+                reason="" if saved else "저장/업로드 실패",
+            )
+        finally:
+            # 이번 실행에서 실제로 쓰기 작업을 받을 수 있는 저장 단위(올해·작년 DB 파일)를
+            # 결과와 무관하게 항상 업로드한다 - release_date 동기화만 일어나고 조기
+            # 반환되는 경로에서도 로컬 변경분이 원격에 반영되도록 한다(orchestration_guide.md §3).
+            self._sync_db_up(year, logger)
+            self._sync_db_up(year - 1, logger)
+
+    def _sync_db_down(self, year: int, logger: logging.Logger) -> None:
+        """DB SSOT(Drive)의 연도별 DB 파일을 로컬 작업 사본으로 받아온다.
+
+        storage가 LocalStorageAdapter면 get_file()이 이미 repository와 같은 파일을
+        가리키므로 로컬 파일에 그대로 다시 쓰는 건 자기 자신을 덮어쓰는 no-op이다.
+        storage가 GoogleDriveAdapter일 때만 실질적인 원격->로컬 다운로드가 된다.
+        """
+        db_path = getattr(self.repository, "db_path", None)
+        if db_path is None:
+            return
+        local_path = db_path(year)
+        remote_path = str(local_path).replace("\\", "/")
+        try:
+            data = self.storage.get_file(remote_path)
+            if data is not None:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(data)
         except Exception as e:
-            logger.error(f"KRX 조회 실패: {e}")
-            return False
+            logger.warning(f"  [DB 동기화 건너뜀] {year}년 DB 다운로드 실패(로컬 사본 유지): {e}")
 
-        if not all_filtered: return False
-
-        existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
-        existing_codes = {s.code for s in existing_stocks}
-
-        target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
-
-        has_new_data = bool(missing_dates) or any(s.code not in existing_codes for s in filtered)
-        excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
-        excel_exists = self.storage.path_exists(excel_path)
-
-        if not has_new_data and excel_exists:
-            logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
-            return True
-        elif not excel_exists:
-            logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
-
-        all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
-        return self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+    def _sync_db_up(self, year: int, logger: logging.Logger) -> None:
+        """로컬 작업 사본의 연도별 DB 파일을 DB SSOT(Drive)로 업로드한다."""
+        db_path = getattr(self.repository, "db_path", None)
+        if db_path is None:
+            return
+        local_path = db_path(year)
+        if not local_path.exists():
+            return
+        remote_path = str(local_path).replace("\\", "/")
+        try:
+            self.storage.put_file(remote_path, local_path.read_bytes())
+        except Exception as e:
+            logger.warning(f"  [DB 동기화 실패] {year}년 DB 업로드 실패: {e}")
 
 
 class ReportGenerationService:
@@ -563,12 +624,12 @@ class ReportGenerationService:
         Returns:
             bool: 성공적 파싱과 서식 기입, 저장이 성사 되었을 경우 True 반환.
         """
-        print(f"\n[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
+        _module_logger.info(f"[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
 
         try:
             stocks, prices = self.repository.load_year(year)
             if not stocks:
-                print(f"  [경고] {year}년 Parquet 데이터가 비어있거나 존재하지 않습니다.")
+                _module_logger.warning(f"[경고] {year}년 데이터가 비어있거나 존재하지 않습니다.")
                 return False
 
             wb = self.excel_exporter.export(year, stocks, prices)
@@ -576,8 +637,8 @@ class ReportGenerationService:
             xlsx_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
 
             self.storage.save_workbook(wb, xlsx_path)
-            print(f"  [완료] {xlsx_path} 재생성 완료")
+            _module_logger.info(f"[완료] {xlsx_path} 재생성 완료")
             return True
         except Exception as e:
-            print(f"  [오류] 엑셀 재생성 중 오류 발생: {e}")
+            _module_logger.error(f"[오류] 엑셀 재생성 중 오류 발생: {e}")
             return False

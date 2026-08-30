@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -6,7 +7,9 @@ from bs4 import BeautifulSoup
 
 from investment_hub.domain.models import InvestmentWarningStock
 from investment_hub.infrastructure.adapters.krx_calendar_service import KrxCalendarService
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
+from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:
@@ -37,7 +40,7 @@ def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str
 
         return _process_rows(rows, mapping)
     except Exception as e:
-        print(f"Exception during scraping: {e}")
+        logger.error(f"Exception during scraping: {e}")
         return []
 def _get_default_dates(start_date: str | None, end_date: str | None) -> tuple[str, str]:
     end = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -60,9 +63,9 @@ def _get_name_to_code_mapping(end_date: str) -> dict:
     # (해당 회차 전체 종목의 코드 매칭이 실패하는 사고로 이어짐) - 최근 영업일로 보정한다.
     trading_date = KrxCalendarService().get_last_trading_day(raw_date.date())
     mapping_date = datetime(trading_date.year, trading_date.month, trading_date.day)
-    print(f"Building stock name-to-code mapping (기준일: {mapping_date.strftime('%Y-%m-%d')})...")
+    logger.info(f"Building stock name-to-code mapping (기준일: {mapping_date.strftime('%Y-%m-%d')})...")
     mapping = adapter.get_ticker_name_mapping(mapping_date, market="ALL", use_cache=True)
-    print(f"Mapping ready: {len(mapping)} stocks")
+    logger.info(f"Mapping ready: {len(mapping)} stocks")
     return mapping
 
 def _fetch_html(url: str, payload: dict) -> str | None:
@@ -74,7 +77,7 @@ def _fetch_html(url: str, payload: dict) -> str | None:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     resp = requests.post(url, data=payload, headers=headers, verify=False, timeout=30)  # nosec B501
     if resp.status_code != 200:
-        print(f"Error: Status code {resp.status_code}")
+        logger.error(f"Error: Status code {resp.status_code}")
         return None
     try:
         return resp.content.decode("utf-8")
@@ -91,12 +94,12 @@ def _parse_table(html: str) -> list | None:
     soup = BeautifulSoup(html, "html.parser")
     tables = soup.select("table")
     if not tables:
-        print("No tables found.")
+        logger.warning("No tables found.")
         return None
     target = next((t for t in tables if "list" in (t.get("class") or []) and "type-00" in (t.get("class") or [])), tables[0])
     rows = target.select("tr")
     if len(rows) <= 1:
-        print("No data rows found.")
+        logger.warning("No data rows found.")
         return None
     return rows
 
@@ -153,7 +156,7 @@ def _parse_stock_from_row(row, mapping: dict) -> InvestmentWarningStock | None:
 
     code = mapping.get(name)
     if not code:
-        print(f"  Warning: Could not find code for '{name}'")
+        logger.warning(f"  Warning: Could not find code for '{name}'")
         return None
 
     return InvestmentWarningStock(
