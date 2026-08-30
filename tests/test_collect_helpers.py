@@ -10,7 +10,7 @@ import pytest
 from investment_hub.application.services import WarningCollectionService
 from investment_hub.domain.models import InvestmentWarningStock
 from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
-from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
+from investment_hub.infrastructure.adapters.sqlite_repository_adapter import SqliteRepositoryAdapter
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 픽스처
@@ -20,7 +20,7 @@ from investment_hub.infrastructure.adapters.parquet_repository_adapter import Pa
 @pytest.fixture
 def service():
     # 저장소는 메모리 수준이나 더미 경로 등 동작만 검증할 수 있는 객체 할당
-    repo = ParquetRepositoryAdapter(base_dir="tests/dummy_parquet")
+    repo = SqliteRepositoryAdapter(base_dir="tests/dummy_sqlite")
     storage = LocalStorageAdapter()
     return WarningCollectionService(
         repository=repo,

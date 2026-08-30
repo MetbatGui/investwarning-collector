@@ -8,11 +8,11 @@ from investment_hub.application import services as services_module
 from investment_hub.application.services import WarningCollectionService
 from investment_hub.domain.models import CollectionResult
 from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
-from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
+from investment_hub.infrastructure.adapters.sqlite_repository_adapter import SqliteRepositoryAdapter
 
 
 def _make_service():
-    repo = ParquetRepositoryAdapter(base_dir="tests/dummy_parquet")
+    repo = SqliteRepositoryAdapter(base_dir="tests/dummy_sqlite")
     storage = LocalStorageAdapter()
     return WarningCollectionService(
         repository=repo,
