@@ -59,6 +59,10 @@ class SqliteRepositoryAdapter(WarningStockRepository):
     def _db_path(self, year: int) -> Path:
         return self._base_dir / f"{year}.db"
 
+    def db_path(self, year: int) -> Path:
+        """연도별 SQLite DB 파일의 로컬 경로를 반환합니다 (GDrive 세션 동기화 등에서 사용)."""
+        return self._db_path(year)
+
     def _connect(self, year: int) -> sqlite3.Connection:
         self._base_dir.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(str(self._db_path(year)))

@@ -503,40 +503,86 @@ class WarningCollectionService:
         """
         logger, year, end_dt = setup_logging(end_date), int(end_date[:4]), datetime.strptime(end_date, "%Y-%m-%d")
 
+        # DB SSOT 세션 시작: 원격(Drive)에 더 최신 DB가 있으면 로컬 작업 사본으로 받아온다
+        # (db_ssot_guide.md §6). 로컬 storage는 repository와 동일 파일을 가리키므로 no-op이다.
+        self._sync_db_down(year, logger)
+        self._sync_db_down(year - 1, logger)
+
         try:
-            all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+            try:
+                all_filtered, filtered = self._step1_fetch_stocks(year, end_date, include_active)
+            except Exception as e:
+                logger.error(f"KRX 조회 실패: {e}")
+                return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
+
+            if not all_filtered:
+                return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
+
+            existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
+            existing_codes = {s.code for s in existing_stocks}
+            new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
+
+            target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
+
+            has_new_data = bool(missing_dates) or new_stock_count > 0
+            excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
+            excel_exists = self.storage.path_exists(excel_path)
+
+            if not has_new_data and excel_exists:
+                logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
+                return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
+            elif not excel_exists:
+                logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
+
+            all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
+            saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
+            return CollectionResult(
+                success=saved,
+                discovered=len(all_filtered),
+                new_stocks=new_stock_count,
+                new_price_rows=len(all_new_rows),
+                reason="" if saved else "저장/업로드 실패",
+            )
+        finally:
+            # 이번 실행에서 실제로 쓰기 작업을 받을 수 있는 저장 단위(올해·작년 DB 파일)를
+            # 결과와 무관하게 항상 업로드한다 - release_date 동기화만 일어나고 조기
+            # 반환되는 경로에서도 로컬 변경분이 원격에 반영되도록 한다(orchestration_guide.md §3).
+            self._sync_db_up(year, logger)
+            self._sync_db_up(year - 1, logger)
+
+    def _sync_db_down(self, year: int, logger: logging.Logger) -> None:
+        """DB SSOT(Drive)의 연도별 DB 파일을 로컬 작업 사본으로 받아온다.
+
+        storage가 LocalStorageAdapter면 get_file()이 이미 repository와 같은 파일을
+        가리키므로 로컬 파일에 그대로 다시 쓰는 건 자기 자신을 덮어쓰는 no-op이다.
+        storage가 GoogleDriveAdapter일 때만 실질적인 원격->로컬 다운로드가 된다.
+        """
+        db_path = getattr(self.repository, "db_path", None)
+        if db_path is None:
+            return
+        local_path = db_path(year)
+        remote_path = str(local_path).replace("\\", "/")
+        try:
+            data = self.storage.get_file(remote_path)
+            if data is not None:
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(data)
         except Exception as e:
-            logger.error(f"KRX 조회 실패: {e}")
-            return CollectionResult(success=False, reason=f"KRX 조회 실패: {e}")
+            logger.warning(f"  [DB 동기화 건너뜀] {year}년 DB 다운로드 실패(로컬 사본 유지): {e}")
 
-        if not all_filtered:
-            return CollectionResult(success=False, reason="대상 기간 내 투자경고종목이 없습니다.")
-
-        existing_stocks, existing_prices = self._step2_sync_and_load(year, all_filtered, logger)
-        existing_codes = {s.code for s in existing_stocks}
-        new_stock_count = sum(1 for s in filtered if s.code not in existing_codes)
-
-        target_dates, missing_dates = self._step3_get_dates(end_dt, days, existing_prices)
-
-        has_new_data = bool(missing_dates) or new_stock_count > 0
-        excel_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
-        excel_exists = self.storage.path_exists(excel_path)
-
-        if not has_new_data and excel_exists:
-            logger.info(f"  [증분 건너뜀] 수집할 누락 시세가 없고, 엑셀 리포트가 이미 존재합니다. ({excel_path})")
-            return CollectionResult(success=True, discovered=len(all_filtered), reason="변경 없음(증분 건너뜀)")
-        elif not excel_exists:
-            logger.info(f"  [파일 누락] 대상 엑셀 리포트 미존재: ({excel_path}). 리포트를 재생성합니다.")
-
-        all_new_rows = self._step45_collect_prices(year, filtered, existing_codes, missing_dates)
-        saved = self._step6_merge_save(year, filtered, all_new_rows, existing_stocks, existing_prices)
-        return CollectionResult(
-            success=saved,
-            discovered=len(all_filtered),
-            new_stocks=new_stock_count,
-            new_price_rows=len(all_new_rows),
-            reason="" if saved else "저장/업로드 실패",
-        )
+    def _sync_db_up(self, year: int, logger: logging.Logger) -> None:
+        """로컬 작업 사본의 연도별 DB 파일을 DB SSOT(Drive)로 업로드한다."""
+        db_path = getattr(self.repository, "db_path", None)
+        if db_path is None:
+            return
+        local_path = db_path(year)
+        if not local_path.exists():
+            return
+        remote_path = str(local_path).replace("\\", "/")
+        try:
+            self.storage.put_file(remote_path, local_path.read_bytes())
+        except Exception as e:
+            logger.warning(f"  [DB 동기화 실패] {year}년 DB 업로드 실패: {e}")
 
 
 class ReportGenerationService:
