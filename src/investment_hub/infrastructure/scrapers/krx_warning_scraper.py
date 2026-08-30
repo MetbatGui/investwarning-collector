@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from investment_hub.domain.models import InvestmentWarningStock
+from investment_hub.infrastructure.adapters.krx_calendar_service import KrxCalendarService
 from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
 
 
@@ -54,7 +55,11 @@ def _build_payload(start: str, end: str) -> dict:
 
 def _get_name_to_code_mapping(end_date: str) -> dict:
     adapter = PyKRXAdapter()
-    mapping_date = min(datetime.strptime(end_date, "%Y-%m-%d"), datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    raw_date = min(datetime.strptime(end_date, "%Y-%m-%d"), datetime.now().replace(hour=0, minute=0, second=0, microsecond=0))
+    # KRX는 주말/휴장일에는 티커 스냅샷을 주지 않아 mapping이 통째로 비게 된다
+    # (해당 회차 전체 종목의 코드 매칭이 실패하는 사고로 이어짐) - 최근 영업일로 보정한다.
+    trading_date = KrxCalendarService().get_last_trading_day(raw_date.date())
+    mapping_date = datetime(trading_date.year, trading_date.month, trading_date.day)
     print(f"Building stock name-to-code mapping (기준일: {mapping_date.strftime('%Y-%m-%d')})...")
     mapping = adapter.get_ticker_name_mapping(mapping_date, market="ALL", use_cache=True)
     print(f"Mapping ready: {len(mapping)} stocks")
@@ -72,12 +77,15 @@ def _fetch_html(url: str, payload: dict) -> str | None:
         print(f"Error: Status code {resp.status_code}")
         return None
     try:
-        return resp.content.decode("euc-kr")
+        return resp.content.decode("utf-8")
     except UnicodeDecodeError:
         try:
-            return resp.content.decode("cp949")
+            return resp.content.decode("euc-kr")
         except UnicodeDecodeError:
-            return resp.text
+            try:
+                return resp.content.decode("cp949")
+            except UnicodeDecodeError:
+                return resp.text
 
 def _parse_table(html: str) -> list | None:
     soup = BeautifulSoup(html, "html.parser")
