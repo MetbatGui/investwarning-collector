@@ -1,4 +1,5 @@
 import argparse
+import logging
 import subprocess
 import sys
 from datetime import datetime
@@ -7,6 +8,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.infrastructure.adapters.sqlite_repository_adapter import SqliteRepositoryAdapter
@@ -36,7 +39,7 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, SqliteRepositoryAd
         client_secret = getattr(args, "client_secret", "secrets/client_secret.json")
         drive_folder = getattr(args, "drive_folder", "KRX_Auto_Crawling_Data")
         drive_folder_id = getattr(args, "drive_folder_id", None)
-        print(f"[설정] Google Drive 저장소 사용 (Token: {token_file})")
+        logger.info(f"[설정] Google Drive 저장소 사용 (Token: {token_file})")
         storage: StoragePort = GoogleDriveAdapter(
             token_file=token_file,
             root_folder_name=drive_folder,
@@ -46,7 +49,7 @@ def _setup_di(args: argparse.Namespace) -> tuple[StoragePort, SqliteRepositoryAd
     else:
         from investment_hub.infrastructure.adapters.local_storage_adapter import LocalStorageAdapter
 
-        print("[설정] 로컬 저장소 사용")
+        logger.info("[설정] 로컬 저장소 사용")
         storage = LocalStorageAdapter()
 
     # Repository는 SQLite를 SSOT로 사용 (db_ssot_guide.md)
@@ -76,11 +79,11 @@ def cmd_today(args: argparse.Namespace) -> int:
     try:
         target_date = datetime.strptime(target_date, "%Y-%m-%d").strftime("%Y-%m-%d")
     except ValueError:
-        print(f"[오류] 날짜 형식이 올바르지 않습니다: {target_date} (YYYY-MM-DD)")
+        logger.error(f"[오류] 날짜 형식이 올바르지 않습니다: {target_date} (YYYY-MM-DD)")
         return 1
 
     if target_date > datetime.now().strftime("%Y-%m-%d"):
-        print(f"[오류] 미래 날짜는 수집할 수 없습니다: {target_date}")
+        logger.error(f"[오류] 미래 날짜는 수집할 수 없습니다: {target_date}")
         return 1
 
     from investment_hub.application.services import WarningCollectionService
@@ -91,7 +94,7 @@ def cmd_today(args: argparse.Namespace) -> int:
         days=args.days,
         include_active=args.include_active,
     )
-    print(
+    logger.info(
         f"[결과] success={result.success} discovered={result.discovered} "
         f"new_stocks={result.new_stocks} new_price_rows={result.new_price_rows}"
         + (f" reason={result.reason}" if result.reason else "")
@@ -104,7 +107,7 @@ def _get_target_years(args: argparse.Namespace) -> list[int]:
     years = [args.year] if args.year else list(range(args.start, args.end + 1))
     valid = [y for y in years if y in YEAR_RANGES]
     skipped = set(years) - set(valid)
-    if skipped: print(f"[경고] 수집 불가 연도 제외: {sorted(skipped)}")
+    if skipped: logger.warning(f"[경고] 수집 불가 연도 제외: {sorted(skipped)}")
     return valid
 
 def cmd_year(args: argparse.Namespace) -> int:
@@ -117,14 +120,14 @@ def cmd_year(args: argparse.Namespace) -> int:
     output_dir = args.output_dir if args.output_dir is not None else ("" if args.storage == "drive" else "output")
     service = WarningCollectionService(repository=repository, storage=storage, output_dir=output_dir)
 
-    print(f"\n{'='*60}\n  연도별 수집: {valid_years}\n{'='*60}")
+    logger.info(f"연도별 수집: {valid_years}")
     results = {
         y: ("[완료]" if service.collect_year(y, end_date=args.end_date, include_active=args.include_active) else "[실패]")
         for y in valid_years
     }
 
-    print(f"\n{'='*60}\n  최종 결과 요약\n{'='*60}")
-    for y, s in results.items(): print(f"  {y}년: {s}")
+    logger.info("최종 결과 요약")
+    for y, s in results.items(): logger.info(f"  {y}년: {s}")
     return 0
 
 
@@ -162,14 +165,14 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
     """Windows 작업 스케줄러 관리 핸들러입니다."""
     task_name, ps1 = "InvestWarningCollector", Path(__file__).parent / "setup_scheduler.ps1"
     if not ps1.exists():
-        print(f"[오류] setup_scheduler.ps1 미존재: {ps1}")
+        logger.error(f"[오류] setup_scheduler.ps1 미존재: {ps1}")
         return 1
 
     if args.action == "install":
-        print(f"[스케줄러] '{task_name}' 등록 중...")
+        logger.info(f"[스케줄러] '{task_name}' 등록 중...")
         return _run_ps_script(ps1, [])
     if args.action == "uninstall":
-        print(f"[스케줄러] '{task_name}' 등록 해제 중...")
+        logger.info(f"[스케줄러] '{task_name}' 등록 해제 중...")
         return _run_ps_script(ps1, ["-Uninstall"])
     if args.action == "status":
         return _show_scheduler_status(task_name)

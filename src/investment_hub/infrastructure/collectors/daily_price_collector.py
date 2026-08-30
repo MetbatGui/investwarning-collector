@@ -3,6 +3,7 @@
 PyKRXAdapter를 사용하여 효율적으로 데이터를 수집합니다.
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import TypedDict
 
@@ -10,6 +11,8 @@ import pandas as pd
 
 from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
 from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
+
+logger = logging.getLogger(__name__)
 
 
 class _StockPeriod(TypedDict):
@@ -83,7 +86,7 @@ def _extract_from_market(df_market: pd.DataFrame, codes: list[str], dt: datetime
 def _fetch_prices(adapter: PyKRXAdapter, dates: list[datetime], periods: dict, use_cache: bool) -> dict[str, list[DailyPriceData]]:
     result: dict[str, list[DailyPriceData]] = {code: [] for code in periods}
     for i, dt in enumerate(dates, 1):
-        if i % 10 == 0: print(f"  날짜 처리 중 {i}/{len(dates)}: {dt.strftime('%Y-%m-%d')}...")
+        if i % 10 == 0: logger.info(f"  날짜 처리 중 {i}/{len(dates)}: {dt.strftime('%Y-%m-%d')}...")
         target_codes = [c for c, p in periods.items() if p["start"] <= dt <= p["end"]]
         if not target_codes: continue
 
@@ -115,19 +118,19 @@ def collect_daily_prices_batch(warning_stocks: list[InvestmentWarningStock], tra
         dict[str, list[DailyPriceData]]: 종목코드별 일별 시세 데이터 리스트.
     """
     if not warning_stocks: return {}
-    print(f"  종목 수집 기간 계산 중 ({len(warning_stocks)}종목)...")
+    logger.info(f"  종목 수집 기간 계산 중 ({len(warning_stocks)}종목)...")
 
     periods, min_dt, max_dt = _build_stock_periods(warning_stocks, trading_days_after_release)
-    print(f"  수집 기간: {min_dt.strftime('%Y-%m-%d')} ~ {max_dt.strftime('%Y-%m-%d')}")
+    logger.info(f"  수집 기간: {min_dt.strftime('%Y-%m-%d')} ~ {max_dt.strftime('%Y-%m-%d')}")
 
     dates = _gen_business_dates(min_dt, max_dt)
-    print(f"  목표 거래일: 약 {len(dates)}일")
+    logger.info(f"  목표 거래일: 약 {len(dates)}일")
 
     result = _fetch_prices(PyKRXAdapter(), dates, periods, use_cache)
-    print("  후처리 중 (정렬 및 필터링)...")
+    logger.info("  후처리 중 (정렬 및 필터링)...")
     result = _post_process(result, periods)
 
-    print(f"  완료: {len(result)}종목 처리됨")
+    logger.info(f"  완료: {len(result)}종목 처리됨")
     return result
 
 

@@ -14,6 +14,7 @@ infrastructure/adapters 계층에 그대로 복사해 쓴다.
 """
 
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -22,6 +23,8 @@ from typing import Optional
 
 import pandas as pd
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class NativeKrxAdapter:
@@ -111,7 +114,7 @@ class NativeKrxAdapter:
             return None
         try:
             with open(path, encoding="utf-8") as f:
-                print(f"  [CACHED] {label} loaded from {path.name}")
+                logger.info(f"  [CACHED] {label} loaded from {path.name}")
                 return json.load(f)
         except Exception:
             return None
@@ -121,9 +124,9 @@ class NativeKrxAdapter:
             path.parent.mkdir(parents=True, exist_ok=True)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"  [CACHED] {label} saved to {path.name}")
+            logger.info(f"  [CACHED] {label} saved to {path.name}")
         except Exception as e:
-            print(f"  [CACHE SAVE ERROR] {label}: {e}")
+            logger.warning(f"  [CACHE SAVE ERROR] {label}: {e}")
 
     # ------------------------------------------------------------------
     # 전종목 시세 스냅샷 (이름/코드/OHLCV 모두 이 한 호출에서 나옴)
@@ -152,7 +155,7 @@ class NativeKrxAdapter:
         self._throttle()
         resp = self.session.post(url, headers=headers, data=payload, timeout=30)
         if resp.status_code != 200:
-            print(f"  [MARKET SNAPSHOT ERROR] status={resp.status_code} date={date_str}")
+            logger.error(f"  [MARKET SNAPSHOT ERROR] status={resp.status_code} date={date_str}")
             return []
         data = resp.json()
         return data.get("OutBlock_1") or data.get("output") or []
@@ -261,7 +264,7 @@ class NativeKrxAdapter:
             df = pd.DataFrame(records).set_index("날짜").sort_index()
             return df
         except Exception as e:
-            print(f"  [OHLCV API ERROR] {ticker}: {e}")
+            logger.warning(f"  [OHLCV API ERROR] {ticker}: {e}")
             return pd.DataFrame()
 
     def _to_ohlcv_df(self, data: list) -> pd.DataFrame:
@@ -312,7 +315,7 @@ class NativeKrxAdapter:
                     days.append(datetime.strptime(trd_str, "%Y%m%d"))
             return sorted(days)
         except Exception as e:
-            print(f"  [TRADING DAYS ERROR] {e}")
+            logger.warning(f"  [TRADING DAYS ERROR] {e}")
             return []
 
     def get_daily_market_ohlcv(self, date: datetime, market: str = "ALL", use_cache: bool = True) -> pd.DataFrame:

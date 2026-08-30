@@ -18,6 +18,8 @@ from investment_hub.infrastructure.collectors.daily_price_collector import colle
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
 from investment_hub.visualization.excel_exporter import WarningExcelExporter
 
+_module_logger = logging.getLogger(__name__)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 로깅 설정
 # ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +33,9 @@ def setup_logging(date_str: str) -> logging.Logger:
     logger = logging.getLogger("WarningCollectionService")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()
+    # 이 로거는 자체 StreamHandler를 아래에서 추가하므로, 루트 로거(cli.py의
+    # basicConfig)로 전파되면 같은 메시지가 두 번 출력된다.
+    logger.propagate = False
 
     fmt = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(message)s",
@@ -90,7 +95,7 @@ class WarningCollectionService:
         Returns:
             bool: 성공적으로 수집 및 저장이 완료되면 True.
         """
-        print(f"\n[{year}년 전체 백필 시작]")
+        _module_logger.info(f"[{year}년 전체 백필 시작]")
 
         filtered = self._step_y1_fetch_and_filter(year, end_date, include_active)
         if not filtered: return False
@@ -112,7 +117,7 @@ class WarningCollectionService:
         Returns:
             list[InvestmentWarningStock]: 필터링된 종목 객체 리스트.
         """
-        print(f"[1/4] '{year}' 연도 종목 스크래핑...")
+        _module_logger.info(f"[1/4] '{year}' 연도 종목 스크래핑...")
         start_date = f"{year}-01-01"
 
         now = datetime.now()
@@ -123,10 +128,10 @@ class WarningCollectionService:
         try:
             stocks = fetch_investment_warning_stocks(start_date, end_date)
             filtered = self._filter_stocks(stocks, start_date, end_date, include_active)
-            print(f"  → 전체 {len(stocks)}종목 중 정책 부합 {len(filtered)}종목")
+            _module_logger.info(f"  → 전체 {len(stocks)}종목 중 정책 부합 {len(filtered)}종목")
             return filtered
         except Exception as e:
-            print(f"스크래핑 중 오류: {e}"); return []
+            _module_logger.error(f"스크래핑 중 오류: {e}"); return []
 
     def _step_y2_collect_prices(self, stocks: list) -> dict:
         """[Step] 필터링된 종목들에 대해 필요한 전체 기간 시세를 일괄 수집합니다.
@@ -137,11 +142,11 @@ class WarningCollectionService:
         Returns:
             dict: 종목코드를 키로, DailyPriceData 리스트를 값으로 갖는 맵.
         """
-        print("\n[3/4] 시세 데이터 수집...")
+        _module_logger.info("[3/4] 시세 데이터 수집...")
         try:
             return collect_daily_prices_batch(stocks, trading_days_after_release=self.trading_days_after_release)
         except Exception as e:
-            print(f"시세 수집 중 오류: {e}"); return {}
+            _module_logger.error(f"시세 수집 중 오류: {e}"); return {}
 
     def _step_y3_save_and_export(self, year: int, stocks: list, prices: dict) -> bool:
         """[Step] 수집된 데이터를 영구 저장소에 기록하고 엑셀 리포트를 생성합니다.
@@ -154,14 +159,14 @@ class WarningCollectionService:
         Returns:
             bool: 저장 및 생성 성공 여부.
         """
-        print("\n[4/4] 결과 저장 (Parquet + Excel)...")
+        _module_logger.info("[4/4] 결과 저장...")
         self.storage.ensure_directory(self.output_dir)
         self.repository.save_year(year, stocks, prices)
 
         re_stocks, re_prices = self.repository.load_year(year)
         wb = self.excel_exporter.export(year, re_stocks, re_prices)
         self.storage.save_workbook(wb, os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx"))
-        print(f"\n  [완료] {year}년 수집 백필 및 Excel 생성 완료")
+        _module_logger.info(f"[완료] {year}년 수집 백필 및 Excel 생성 완료")
         return True
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -310,7 +315,7 @@ class WarningCollectionService:
         end_date = end_dt.strftime("%Y-%m-%d")
 
         if end_dt.year < year and not end_date_str:
-            print("  [건너뜀] 대상 기간이 유효하지 않음 (미래 연도)")
+            _module_logger.info("[건너뜀] 대상 기간이 유효하지 않음 (미래 연도)")
             return [], []
 
         cross_year = self.repository.year_exists(year - 1)
@@ -619,12 +624,12 @@ class ReportGenerationService:
         Returns:
             bool: 성공적 파싱과 서식 기입, 저장이 성사 되었을 경우 True 반환.
         """
-        print(f"\n[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
+        _module_logger.info(f"[Export Excel] {year}년 데이터 엑셀 재생성 시작...")
 
         try:
             stocks, prices = self.repository.load_year(year)
             if not stocks:
-                print(f"  [경고] {year}년 Parquet 데이터가 비어있거나 존재하지 않습니다.")
+                _module_logger.warning(f"[경고] {year}년 데이터가 비어있거나 존재하지 않습니다.")
                 return False
 
             wb = self.excel_exporter.export(year, stocks, prices)
@@ -632,8 +637,8 @@ class ReportGenerationService:
             xlsx_path = os.path.join(self.output_dir, f"투자경고종목분석({year}년).xlsx")
 
             self.storage.save_workbook(wb, xlsx_path)
-            print(f"  [완료] {xlsx_path} 재생성 완료")
+            _module_logger.info(f"[완료] {xlsx_path} 재생성 완료")
             return True
         except Exception as e:
-            print(f"  [오류] 엑셀 재생성 중 오류 발생: {e}")
+            _module_logger.error(f"[오류] 엑셀 재생성 중 오류 발생: {e}")
             return False
