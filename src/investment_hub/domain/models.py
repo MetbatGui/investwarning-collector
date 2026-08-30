@@ -202,3 +202,7 @@ class CollectionResult:
     new_stocks: int = 0
     new_price_rows: int = 0
     reason: str = ""
+    # DB SSOT(Drive) 업로드 실패 여부. True면 호출부(CLI)는 exit code를 0이 아닌 값으로
+    # 끝내야 한다 - 로컬은 항상 불신의 대상이라(db_ssot_guide.md §6.2) 다음 실행이 Drive를
+    # 다시 받아 로컬을 덮어쓸 수 있으므로, 업로드 실패를 조용히 넘기면 안 된다.
+    db_upload_failed: bool = False

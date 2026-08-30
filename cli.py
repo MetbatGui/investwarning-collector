@@ -96,9 +96,15 @@ def cmd_today(args: argparse.Namespace) -> int:
     )
     logger.info(
         f"[결과] success={result.success} discovered={result.discovered} "
-        f"new_stocks={result.new_stocks} new_price_rows={result.new_price_rows}"
+        f"new_stocks={result.new_stocks} new_price_rows={result.new_price_rows} "
+        f"db_upload_failed={result.db_upload_failed}"
         + (f" reason={result.reason}" if result.reason else "")
     )
+    if result.db_upload_failed:
+        # 로컬은 항상 불신의 대상이라(db_ssot_guide.md §6.2) 다음 실행이 Drive를 다시
+        # 받아 로컬을 덮어쓸 수 있다 - 업로드 실패를 조용히 넘기지 않는다.
+        logger.error("[오류] DB SSOT 업로드 실패 - 다음 실행 전에 재시도 필요")
+        return 1
     return 0 if result.success else 1
 
 
