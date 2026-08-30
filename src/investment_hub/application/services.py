@@ -13,7 +13,7 @@ import pandas as pd
 from investment_hub.core.ports.repository_port import WarningStockRepository
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
+from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
 from investment_hub.infrastructure.collectors.daily_price_collector import collect_daily_prices_batch
 from investment_hub.infrastructure.scrapers.krx_warning_scraper import fetch_investment_warning_stocks
 from investment_hub.visualization.excel_exporter import WarningExcelExporter

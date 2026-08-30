@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 
 from investment_hub.domain.models import InvestmentWarningStock
 from investment_hub.infrastructure.adapters.krx_calendar_service import KrxCalendarService
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
+from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
 
 
 def fetch_investment_warning_stocks(start_date: str | None = None, end_date: str | None = None) -> list[InvestmentWarningStock]:

@@ -4,6 +4,10 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from investment_hub.core.ports.storage_port import StoragePort
 from investment_hub.infrastructure.adapters.parquet_repository_adapter import ParquetRepositoryAdapter
 

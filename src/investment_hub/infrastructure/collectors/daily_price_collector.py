@@ -9,7 +9,7 @@ from typing import TypedDict
 import pandas as pd
 
 from investment_hub.domain.models import DailyPriceData, InvestmentWarningStock
-from investment_hub.infrastructure.adapters.pykrx_adapter import PyKRXAdapter
+from investment_hub.infrastructure.adapters.native_krx_adapter import NativeKrxAdapter as PyKRXAdapter
 
 
 class _StockPeriod(TypedDict):
