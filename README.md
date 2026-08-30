@@ -96,8 +96,8 @@ GOOGLE_DRIVE_ROOT_FOLDER_ID=your_google_drive_folder_id
 # 최근 7일 증분 수집 (로컬 저장)
 uv run python cli.py today --days 7
 
-# 최근 7일 증분 수집 + 구글 드라이브 업로드 (cron이 실행하는 것과 동일)
-uv run python cli.py today --days 7 --storage drive
+# 최근 30영업일 증분 수집 + 구글 드라이브 업로드 (cron이 실행하는 것과 동일)
+uv run python cli.py today --days 30 --storage drive
 
 # 특정 날짜 기준 수집
 uv run python cli.py today --date 2026-08-28 --days 7
@@ -119,7 +119,8 @@ docker compose -f docker/docker-compose.yml run --rm investwarning-collector pyt
 docker compose -f docker/docker-compose.yml up -d investwarning-collector-cron
 ```
 
-컨테이너 내장 cron이 스케줄에 따라 `today --days 7 --storage drive`를 자동 실행합니다.
+컨테이너 내장 cron이 스케줄에 따라 `today --days 30 --storage drive`를 자동 실행합니다
+(최대 1달 공백까지 자동 백필).
 스케줄은 `docker/crontab`을 참고하세요(기본: 평일 16:00 KST).
 
 ---
